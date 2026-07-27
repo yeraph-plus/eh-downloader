@@ -1,0 +1,17 @@
+.env
+.tmp/
+*.db
+*.sqlite
+*.sqlite3
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+frontend/node_modules/
+frontend/dist/
+*.tsbuildinfo
+data/
+cache/
+backend/test-output/
+backend/.test-tmp/
+backend/pytest-cache-files-*/
