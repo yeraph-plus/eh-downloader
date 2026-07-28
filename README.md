@@ -8,6 +8,10 @@ Downloads are handled through the official archive pages. The application does n
 
 ## Features
 
+![Screenshot](https://github.com/yeraph-plus/eh-downloader/blob/main/screenshots/110647.jpg)
+
+![Screenshot](https://github.com/yeraph-plus/eh-downloader/blob/main/screenshots/110815.jpg)
+
 - Submit gallery URLs directly, one URL per line.
 - Download original or resampled archives.
 - Manage multiple EH accounts and track their GP, Credits, and account status.

@@ -6,6 +6,11 @@ Eh Downloader 是一个下载 E-Hentai / ExHentai 画廊 ZIP 的 Web 应用，�
 
 ## 主要功能
 
+![截图](https://github.com/yeraph-plus/eh-downloader/blob/main/screenshots/110647.jpg)
+
+![截图](https://github.com/yeraph-plus/eh-downloader/blob/main/screenshots/110815.jpg)
+
+- Submit gallery URLs directly, one URL per line.
 - 直接提交画廊链接 URL ，每行一个。
 - 下载原始归档或重采样归档。
 - 管理多个 EH 账户，并记录 GP、Credits 和账户状态。
