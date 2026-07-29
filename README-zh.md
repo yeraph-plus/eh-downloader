@@ -47,7 +47,6 @@ openssl rand -hex 32
 
 ```dotenv
 APP_SECRET=上一步生成的随机字符串
-ADMIN_USERNAME=admin
 ADMIN_PASSWORD=一个足够长的管理密码
 EH_DOWNLOADER_IMAGE=ghcr.io/yeraph-plus/eh-downloader:latest
 ```
@@ -66,18 +65,19 @@ docker compose ps
 
 ## 常用配置
 
-| 变量 | 默认值 | 说明 |
-| --- | --- | --- |
-| `WEB_BIND_ADDRESS` | `127.0.0.1` | Web 监听地址 |
-| `WEB_PORT` | `8000` | Web 映射端口 |
-| `SECURE_COOKIES` | `false` | HTTPS 部署后应设为 `true` |
-| `EH_PROXY_URL` | 空 | EH 请求使用的 HTTP/SOCKS 代理地址 |
-| `DEFAULT_RETENTION_DAYS` | `7` | 初始缓存保留天数，`0` 表示永久 |
-| `DEFAULT_CACHE_LIMIT_BYTES` | `21474836480` | 初始缓存上限，默认 20 GiB |
-| `DEFAULT_MAX_ARCHIVE_SIZE_MB` | `4096` | 单个归档允许的最大大小 |
-| `DEFAULT_WORKER_CONCURRENCY` | `2` | 下载并发，允许 1-4 |
+`.env` 中只需设置以下变量。其他配置均有合理默认值，启动后可在设置页调整。
 
-运行后可在设置页调整缓存、游客权限、下载大小限制和 Worker 并发。
+| 变量 | 必填 | 说明 |
+| --- | --- | --- |
+| `APP_SECRET` | 是 | 随机字符串（最少 32 位），用于加密账户 Cookie |
+| `ADMIN_PASSWORD` | 是 | 管理员登录密码（最少 10 位） |
+| `EH_DOWNLOADER_IMAGE` | 否 | 容器镜像标签 |
+| `WEB_BIND_ADDRESS` | 否 | Web 监听地址（默认 `127.0.0.1`） |
+| `WEB_PORT` | 否 | Web 映射端口（默认 `8000`） |
+| `SECURE_COOKIES` | 否 | HTTPS 部署后应设为 `true` |
+| `EH_PROXY_URL` | 否 | EH 请求使用的 HTTP/SOCKS 代理地址 |
+
+管理员用户名默认为 `admin`。缓存、游客权限、下载大小限制和 Worker 并发均可在启动后的设置页调整。
 
 Tips：Docker 使用宿主机代理时，不能在容器内填写 `127.0.0.1`。例如宿主机代理端口为 `7890`：
 

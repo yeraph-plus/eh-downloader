@@ -1,23 +1,22 @@
 name: eh-downloader
 
 x-eh-downloader: &eh-downloader
-  image: ${EH_DOWNLOADER_IMAGE:-ghcr.io/yeraph-plus/eh-downloader:latest}
+  image: ghcr.io/yeraph-plus/eh-downloader:latest
   pull_policy: always
   restart: "on-failure:5"
   environment:
-    APP_SECRET: ${APP_SECRET:?Set APP_SECRET in .env}
-    ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
-    ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Set ADMIN_PASSWORD in .env}
-    SECURE_COOKIES: ${SECURE_COOKIES:-false}
+    APP_SECRET: ${APP_SECRET:?}
+    ADMIN_USERNAME: ${ADMIN_USERNAME:?}
+    ADMIN_PASSWORD: ${ADMIN_PASSWORD:?}
+    SECURE_COOKIES: ${SECURE_COOKIES:?}
     DATABASE_URL: sqlite:////app/data/eh-downloader.db
+    DEFAULT_RETENTION_DAYS: ${DEFAULT_RETENTION_DAYS:?}
+    DEFAULT_CACHE_LIMIT_BYTES: ${DEFAULT_CACHE_LIMIT_BYTES:?}
+    DEFAULT_MAX_ARCHIVE_SIZE_MB: ${DEFAULT_MAX_ARCHIVE_SIZE_MB:?}
+    DEFAULT_WORKER_CONCURRENCY: ${DEFAULT_WORKER_CONCURRENCY:?}
+    EH_PROXY_URL: ${EH_PROXY_URL:?}
     CACHE_DIR: /app/cache
     FRONTEND_DIR: /app/frontend
-    DEFAULT_RETENTION_DAYS: ${DEFAULT_RETENTION_DAYS:-7}
-    DEFAULT_CACHE_LIMIT_BYTES: ${DEFAULT_CACHE_LIMIT_BYTES:-21474836480}
-    DEFAULT_MAX_ARCHIVE_SIZE_MB: ${DEFAULT_MAX_ARCHIVE_SIZE_MB:-4096}
-    DEFAULT_WORKER_CONCURRENCY: ${DEFAULT_WORKER_CONCURRENCY:-2}
-    EH_PROXY_URL: ${EH_PROXY_URL:-}
-    TZ: ${TZ:-Asia/Shanghai}
   volumes:
     - ./data:/app/data
     - ./cache:/app/cache
@@ -27,10 +26,10 @@ services:
     <<: *eh-downloader
     command: [ "uvicorn", "app.main:app", "--app-dir", "/app/backend", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "*" ]
     ports:
-      - "${WEB_BIND_ADDRESS:-127.0.0.1}:${WEB_PORT:-8000}:8000/tcp"
+      - "${WEB_BIND_ADDRESS}:${WEB_PORT}:8000/tcp"
     healthcheck:
       test: [ "CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=3)" ]
-      interval: 30s
+      interval: 60s
       timeout: 5s
       start_period: 10s
       retries: 3
@@ -40,23 +39,22 @@ services:
     command: [ "python", "-m", "app.worker_main" ]
     healthcheck:
       test: [ "CMD-SHELL", "kill -0 1" ]
-      interval: 30s
+      interval: 60s
       timeout: 5s
       start_period: 10s
       retries: 3
   # hath:
-  #   image: ${HATH_IMAGE:-ghcr.io/yeraph-plus/eh-downloader:hath}
+  #   image: ghcr.io/yeraph-plus/eh-downloader:hath
   #   pull_policy: always
-  #   restart: "on-failure:5"
+  #   restart: always
   #   network_mode: host
   #   cap_add:
   #     - NET_BIND_SERVICE
   #   environment:
-  #     HATH_CLIENT_ID: ${HATH_CLIENT_ID:?Set HATH_CLIENT_ID in .env}
-  #     HATH_CLIENT_KEY: ${HATH_CLIENT_KEY:?Set HATH_CLIENT_KEY in .env}
-  #     HATH_PORT: ${HATH_PORT:?Set HATH_PORT in .env}
+  #     HATH_CLIENT_ID: ${HATH_CLIENT_ID:?}
+  #     HATH_CLIENT_KEY: ${HATH_CLIENT_KEY:?}
+  #     HATH_PORT: ${HATH_PORT:?}
   #     JAVA_TOOL_OPTIONS: ${HATH_JAVA_OPTIONS:--Xms128m -Xmx512m}
-  #     TZ: ${TZ:-Asia/Shanghai}
   #   volumes:
   #     - ./data:/hath/data
   #     - ./cache:/hath/cache

@@ -1,6 +1,6 @@
 # Eh Downloader
 
-[简体中文](README-ZH.md)
+[简体中文](README-zh.md)
 
 Eh Downloader is a web application for downloading E-Hentai and ExHentai gallery ZIP archives. It supports both Original Archive and Resample Archive downloads.
 
@@ -48,7 +48,6 @@ Edit `.env` and set at least the following values:
 
 ```dotenv
 APP_SECRET=the-random-string-generated-above
-ADMIN_USERNAME=admin
 ADMIN_PASSWORD=a-long-and-unique-administrator-password
 EH_DOWNLOADER_IMAGE=ghcr.io/yeraph-plus/eh-downloader:latest
 ```
@@ -67,18 +66,19 @@ The default address is [http://127.0.0.1:8000](http://127.0.0.1:8000). The readi
 
 ## Common Configuration
 
-| Variable | Default | Description |
-| --- | --- | --- |
-| `WEB_BIND_ADDRESS` | `127.0.0.1` | Web bind address |
-| `WEB_PORT` | `8000` | Published web port |
-| `SECURE_COOKIES` | `false` | Set to `true` when serving over HTTPS |
-| `EH_PROXY_URL` | Empty | HTTP/SOCKS proxy used for EH requests |
-| `DEFAULT_RETENTION_DAYS` | `7` | Initial cache retention in days; `0` means permanent |
-| `DEFAULT_CACHE_LIMIT_BYTES` | `21474836480` | Initial cache limit; 20 GiB by default |
-| `DEFAULT_MAX_ARCHIVE_SIZE_MB` | `4096` | Maximum size allowed for a single archive |
-| `DEFAULT_WORKER_CONCURRENCY` | `2` | Download concurrency; allowed range is 1-4 |
+Only the following variables need to be set in `.env`. All other settings have sensible defaults and can be changed later from the Settings page.
 
-After startup, cache settings, guest permissions, the archive size limit, and Worker concurrency can be changed from the Settings page.
+| Variable | Required | Description |
+| --- | --- | --- |
+| `APP_SECRET` | Yes | Random string (min 32 chars), used to encrypt account cookies |
+| `ADMIN_PASSWORD` | Yes | Administrator login password (min 10 chars) |
+| `EH_DOWNLOADER_IMAGE` | No | Container image tag |
+| `WEB_BIND_ADDRESS` | No | Web bind address (default `127.0.0.1`) |
+| `WEB_PORT` | No | Published web port (default `8000`) |
+| `SECURE_COOKIES` | No | Set to `true` when serving over HTTPS |
+| `EH_PROXY_URL` | No | HTTP/SOCKS proxy used for EH requests |
+
+The administrator username defaults to `admin`. Cache settings, guest permissions, archive size limits, and Worker concurrency can all be adjusted from the Settings page after startup.
 
 Tip: When Docker uses a proxy running on the host, do not use `127.0.0.1` from inside the container. For example, if the host proxy listens on port `7890`:
 
