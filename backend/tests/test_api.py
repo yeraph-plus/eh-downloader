@@ -402,6 +402,7 @@ def test_guest_access_is_off_by_default(test_settings):
                 "download_original": 1,
                 "download_resample": 0,
             },
+            "credit_balance": None,
             "csrf_token": None,
         }
         assert client.get("/api/v1/tasks").status_code == 401

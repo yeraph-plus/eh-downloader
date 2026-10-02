@@ -33,6 +33,10 @@ class SessionResponse(BaseModel):
     core_configured: bool
     core_login_url: str | None = None
     prices: SessionPrices
+    # The site user's ledger balance in core mode, quoted on the pricing
+    # card; None for every other identity and whenever the site cannot
+    # be asked (the desk never fails on a balance read).
+    credit_balance: int | None = None
     # The admin's write token, so a reloaded settings page can keep
     # mutating without a fresh password entry. Guests never get one.
     csrf_token: str | None = None

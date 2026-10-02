@@ -2,7 +2,7 @@
 import { computed, h, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { NAlert, NButton, NDataTable, NInput, NInputNumber, NModal, NProgress, NRadioButton, NRadioGroup, NSwitch, NTag, useMessage, type DataTableColumns } from 'naive-ui'
 import { BookOpen, ChartColumn, Download, ExternalLink, KeyRound, Languages, Lock, LogIn, LogOut, Plus, RefreshCw, Save, Settings as SettingsIcon, Upload, UserRound, X } from '@lucide/vue'
-import { api, ApiError, clearCsrfToken, setCsrfToken } from './api'
+import { api, apiBlob, ApiError, clearCsrfToken, setCsrfToken } from './api'
 import type { AccessMode, Account, ArchiveType, GuestDownloadMode, ServiceStats, SessionState, Settings, Task } from './types'
 
 const copy = {
@@ -68,6 +68,8 @@ const copy = {
   priceOriginalDownload: ['原始归档下载', 'Original archive download'],
   priceResampleDownload: ['重采样归档下载', 'Resample archive download'],
   pricePerUse: ['积分/次', 'credits/use'],
+  yourBalance: ['当前积分余额：', 'Current balance: '],
+  createFailed: ['创建失败', 'Task creation failed'], downloadFailed: ['下载失败', 'Download failed'],
   saveSettings: ['保存设置', 'Save settings'], saved: ['设置已保存', 'Settings saved'], queued: ['任务已进入队列', 'Task added to queue'], accountImported: ['账户已加入账户池', 'Account added'],
   apiToken: ['API远程调用', 'Remote API'], tokenDesc: ['管理员权限；轮换后旧 Token 立即失效', 'Administrator access; rotating immediately revokes the previous token'],
   rotateToken: ['轮换 Token', 'Rotate token'], createToken: ['创建 Token', 'Create token'], shownOnce: ['仅显示一次', 'Shown once'],
@@ -104,6 +106,7 @@ const guestDownloadMode = ref<GuestDownloadMode>('disabled')
 const accessMode = ref<AccessMode>('admin')
 const siteIdentity = ref(false)
 const prices = ref<SessionState['prices']>({ create_original: 0, create_resample: 0, download_original: 0, download_resample: 0 })
+const creditBalance = ref<number | null>(null)
 const coreConfigured = ref(false)
 const coreLoginUrl = ref<string | null>(null)
 const submitting = ref(false)
@@ -136,6 +139,24 @@ function priceBadge(value: number): string {
 }
 function priceBadgeType(value: number): 'warning' | 'success' {
   return value > 0 ? 'warning' : 'success'
+}
+/** 余额不足的后缀是后端拼的英文串，展示前换成本地化的剩余积分文本。 */
+function localizeBalance(text: string): string {
+  return text.replace(/\(current balance: (\d+)\)/g, (_match, balance) =>
+    locale.value === 'zh-CN' ? `剩余积分：${balance}` : `(remaining balance: ${balance})`)
+}
+/** 失败反馈：toast 报动作失败并带原因，横幅承载同样的完整文本。 */
+function reportFailure(label: string, cause: unknown) {
+  const text = localizeBalance((cause as Error)?.message || String(cause))
+  error.value = text
+  message.error(locale.value === 'zh-CN' ? `${label}：${text}` : `${label}: ${text}`)
+}
+/** 余额尽力刷新：只在 core 模式且站点身份有效时有值，失败维持原值。 */
+async function refreshBalance() {
+  if (accessMode.value !== 'core' || !siteIdentity.value) return
+  try {
+    creditBalance.value = (await api<SessionState>('/api/v1/auth/session')).credit_balance
+  } catch { /* 余额展示是尽力而为 */ }
 }
 const apiDocsUrl = computed(() => {
   const pathname = window.location.pathname
@@ -195,7 +216,7 @@ const taskColumns = computed<DataTableColumns<Task>>(() => [
   } },
   { title: t('info'), key: 'message', minWidth: 230, render: (row) => h('span', { class: row.error ? 'error-text' : 'muted' }, row.error || row.wait_reason || formatDate(row.created_at)) },
   { title: '', key: 'action', width: 64, align: 'right', render: (row) => row.download_url
-    ? h(NButton, { tag: 'a', href: row.download_url, quaternary: true, circle: true, title: t('downloadArchive') }, { icon: () => h(Download, { size: 18 }) }) : null },
+    ? h(NButton, { quaternary: true, circle: true, title: t('downloadArchive'), onClick: () => downloadTask(row) }, { icon: () => h(Download, { size: 18 }) }) : null },
 ])
 
 const accountColumns = computed<DataTableColumns<Account>>(() => [
@@ -216,6 +237,7 @@ function applySession(state: SessionState) {
   coreConfigured.value = state.core_configured
   coreLoginUrl.value = state.core_login_url
   prices.value = state.prices
+  creditBalance.value = state.credit_balance
   if (state.csrf_token) setCsrfToken(state.csrf_token)
   syncArchiveType()
 }
@@ -318,7 +340,34 @@ async function createTask() {
     if (invalidLine) throw new Error(t('invalidGalleryUrl'))
     const created = await api<Task[]>('/api/v1/tasks', { method: 'POST', body: JSON.stringify({ gallery_urls: galleryUrls.value, archive_type: archiveType.value }) })
     galleryUrls.value = ''; message.success(`${created.length} ${t('queued')}`); await refreshTasks()
-  } catch (cause) { error.value = (cause as Error).message } finally { submitting.value = false }
+    refreshBalance()
+  } catch (cause) { reportFailure(t('createFailed'), cause) } finally { submitting.value = false }
+}
+
+// 同一行禁止并发下载：每次下载都是一次独立计费，双击会双倍扣分。
+const activeDownloads = new Set<string>()
+
+/** 下载经浏览器 fetch 中转：失败被拦截成 toast/横幅（裸链接失败只会
+ *  跳到一段 JSON），成功后触发本地保存并刷新余额。 */
+async function downloadTask(row: Task) {
+  if (!row.download_url || activeDownloads.has(row.id)) return
+  activeDownloads.add(row.id)
+  try {
+    const blob = await apiBlob(row.download_url)
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = row.filename || `eh-archive-${row.gid}.zip`
+    document.body.appendChild(anchor)
+    anchor.click()
+    anchor.remove()
+    URL.revokeObjectURL(url)
+    refreshBalance()
+  } catch (cause) {
+    reportFailure(t('downloadFailed'), cause)
+  } finally {
+    activeDownloads.delete(row.id)
+  }
 }
 
 async function importAccount() {
@@ -404,7 +453,10 @@ watch(isAdmin, (value) => { if (!value) activePage.value = 'downloads' })
           </div>
         </section>
         <div v-if="accessMode === 'core'" class="price-banner">
-          <div class="price-title">{{ t('priceTitle') }}</div>
+          <div class="price-title">
+            <span>{{ t('priceTitle') }}</span>
+            <span v-if="creditBalance !== null" class="price-balance">{{ t('yourBalance') }}{{ creditBalance.toLocaleString(locale) }}</span>
+          </div>
           <ul class="price-list">
             <li><span>{{ t('priceOriginalCreate') }}</span><n-tag :type="priceBadgeType(prices.create_original)" size="small" :bordered="false">{{ priceBadge(prices.create_original) }}</n-tag></li>
             <li><span>{{ t('priceResampleCreate') }}</span><n-tag :type="priceBadgeType(prices.create_resample)" size="small" :bordered="false">{{ priceBadge(prices.create_resample) }}</n-tag></li>

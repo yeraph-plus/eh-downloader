@@ -44,17 +44,28 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
     headers.set('X-CSRF-Token', csrfToken)
   }
   const response = await fetch(path, { ...init, headers, credentials: 'include' })
-  if (!response.ok) {
-    let message = `Request failed (${response.status})`
-    try {
-      const payload = await response.json()
-      const text = detailText(payload.detail)
-      if (text) message = text
-    } catch {
-      // Keep the HTTP fallback message.
-    }
-    throw new ApiError(response.status, message)
-  }
+  if (!response.ok) throw await toApiError(response)
   if (response.status === 204) return undefined as T
   return response.json() as Promise<T>
+}
+
+// Archive downloads ride the same error contract as api(), but answer a
+// binary body instead of JSON — failures must surface as ApiError so the
+// desk can toast them instead of navigating to an error payload.
+export async function apiBlob(path: string): Promise<Blob> {
+  const response = await fetch(path, { credentials: 'include' })
+  if (!response.ok) throw await toApiError(response)
+  return response.blob()
+}
+
+async function toApiError(response: Response): Promise<ApiError> {
+  let message = `Request failed (${response.status})`
+  try {
+    const payload = await response.json()
+    const text = detailText(payload.detail)
+    if (text) message = text
+  } catch {
+    // Keep the HTTP fallback message.
+  }
+  return new ApiError(response.status, message)
 }

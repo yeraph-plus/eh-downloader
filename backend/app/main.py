@@ -15,6 +15,7 @@ from .aiya_core_integration import (
     MODE_CORE,
     AiyaCoreIntegration,
     AccessContext,
+    IntegrationError,
     PUBLIC_REQUESTER_TYPES,
 )
 from .auth_service import AuthService, CookieFormatError
@@ -187,10 +188,20 @@ def create_app(settings: Settings | None = None, core: AiyaCoreIntegration | Non
         admin_identity = security.parse_session(request.cookies.get("ehd_session"))
         is_admin = admin_identity is not None
         mode = core.effective_mode(store.get_access_mode(session))
-        site_identity = False
+        site_user_id = None
         if mode == MODE_CORE:
             bearer = request.cookies.get(settings.aiya_core_session_cookie)
-            site_identity = core.resolve_site_identity(bearer) is not None
+            site_user_id = core.resolve_site_identity(bearer)
+        site_identity = site_user_id is not None
+        # Best-effort balance for the pricing card: a site outage or a
+        # malformed ledger answer hides the line instead of failing the
+        # session (the read paths stay alive when the site is down).
+        credit_balance = None
+        if site_user_id is not None:
+            try:
+                credit_balance = core.balance(site_user_id)
+            except IntegrationError:
+                credit_balance = None
         # The redirect link is page-configured only (no env fallback).
         core_login_url = store.get_core_site_url(session) or None
         prices = {
@@ -207,6 +218,7 @@ def create_app(settings: Settings | None = None, core: AiyaCoreIntegration | Non
             core_configured=core.enabled(),
             core_login_url=core_login_url,
             prices=prices,
+            credit_balance=credit_balance,
             csrf_token=admin_identity.csrf_token if admin_identity else None,
         )
 

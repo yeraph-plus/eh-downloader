@@ -17,6 +17,7 @@ export interface SessionState {
   core_configured: boolean
   core_login_url: string | null
   prices: SessionPrices
+  credit_balance: number | null
   csrf_token: string | null
 }
 

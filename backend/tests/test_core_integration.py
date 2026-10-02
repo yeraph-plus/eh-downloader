@@ -197,6 +197,7 @@ def test_core_mode_anonymous_can_browse_but_not_act(test_settings):
     state = client.get("/api/v1/auth/session").json()
     assert state["mode"] == "core"
     assert state["site_identity"] is False
+    assert state["credit_balance"] is None
     # Browsing stays alive, actions are refused.
     assert [row["id"] for row in client.get("/api/v1/tasks").json()] == [created["id"]]
     assert client.post(
@@ -224,6 +225,8 @@ def test_core_mode_charges_the_site_user_per_creation(test_settings):
         assert charge["source"] == "spend_eh"
         assert charge["ref"] == "task:12345:abcdef0123:resample"
         assert charge["dedupe"] == "ehd_task:12345:abcdef0123:resample"
+        # The pricing card quotes the ledger balance after the charge.
+        assert client.get("/api/v1/auth/session").json()["credit_balance"] == 95
 
         with app.state.database.session_factory() as session:
             task = session.scalars(select(DownloadTask)).first()
@@ -307,6 +310,8 @@ def test_core_mode_an_insufficient_balance_blocks_creation(test_settings):
         )
         assert response.status_code == 409
         assert "3" in response.json()["detail"]
+        # A refused charge leaves the ledger untouched.
+        assert client.get("/api/v1/auth/session").json()["credit_balance"] == 3
         assert task_count(app) == 0
 
 

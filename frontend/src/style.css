@@ -27,8 +27,9 @@ button, input, textarea { font: inherit; }
 .top-actions { display: flex; align-items: center; justify-content: flex-end; gap: 4px; }
 .content { width: min(1440px, 100%); margin: 0 auto; padding: 24px; display: grid; gap: 18px; }
 .price-banner { margin-bottom: 18px; background: white; border: 1px solid #dfe3e1; border-radius: 6px; padding: 18px 20px; }
-.price-banner .price-title { color: #429488; }
+.price-banner .price-title { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; color: #429488; }
 .price-banner .price-title { font-weight: 600; margin-bottom: 8px; }
+.price-banner .price-balance { color: #b45309; font-weight: 700; white-space: nowrap; }
 .price-banner .price-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
 .price-banner .price-list li { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .submit-band { display: flex; flex-direction: column; align-items: stretch; gap: 12px; padding: 18px 0 22px; border-bottom: 1px solid #dfe3e1; }
