@@ -123,19 +123,23 @@ jobs:
           sbom: true
 
   cleanup:
-    name: Prune sha- tagged versions
-    needs: publish
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    name: Prune versioned tags
+    # The package keeps only the floating latest/hath tags: every push
+    # prunes the versioned tags (a tag release also finishes publishing
+    # first, so its fresh pins are pruned right away) and removes
+    # anything left untagged.
+    needs: [test, publish]
+    if: always() && github.event_name == 'push' && needs.test.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
     steps:
-      - name: Remove sha- and hath-sha- tagged versions
+      - name: Remove versioned tags, keep latest and hath
         uses: dataaxiom/ghcr-cleanup-action@v1
         with:
           owner: ${{ github.repository_owner }}
           package: eh-downloader
-          delete-tags: "sha-*,hath-sha-*"
+          delete-tags: "v*,1.*,hath-*,sha-*,main"
           delete-untagged: true
           token: ${{ secrets.GITHUB_TOKEN }}
