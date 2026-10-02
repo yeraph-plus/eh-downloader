@@ -6,7 +6,14 @@ from sqlalchemy.orm import Session
 
 from .config import Settings
 from .eh_client import GalleryRef
-from .models import Archive, CacheEntry, DownloadTask, RequesterType, TaskStatus, utcnow
+from .models import (
+    PUBLIC_REQUESTER_TYPES,
+    Archive,
+    CacheEntry,
+    DownloadTask,
+    TaskStatus,
+    utcnow,
+)
 
 
 class TaskService:
@@ -74,27 +81,23 @@ class TaskService:
         return task, True
 
     @staticmethod
-    def visible_query(identity_kind: str, *, guest_access: bool):
+    def visible_query(*, is_admin: bool):
+        """Admin sees everything; the public desk sees its own guest/user
+        records plus every ready archive. The public requester types come
+        from the shared models vocabulary — the service only runs the SQL."""
         query = select(DownloadTask).order_by(DownloadTask.created_at.desc())
-        if identity_kind == RequesterType.GUEST.value:
+        if not is_admin:
             query = query.where(
                 or_(
-                    DownloadTask.requester_type == RequesterType.GUEST.value,
+                    DownloadTask.requester_type.in_(PUBLIC_REQUESTER_TYPES),
                     DownloadTask.status.in_({
                         TaskStatus.COMPLETED.value,
                         TaskStatus.WAITING_DOWNLOAD.value,
                     }),
-                ) if guest_access else DownloadTask.id.is_(None)
+                )
             )
         return query
 
-    @staticmethod
-    def can_access(task: DownloadTask, identity_kind: str, *, guest_access: bool) -> bool:
-        return identity_kind == RequesterType.ADMIN.value or guest_access and (
-            task.requester_type == RequesterType.GUEST.value
-            or task.status in {TaskStatus.COMPLETED.value, TaskStatus.WAITING_DOWNLOAD.value}
-            and task.archive is not None
-        )
 
     @staticmethod
     def cached_archive(session: Session, task: DownloadTask) -> tuple[Archive, CacheEntry] | None:

@@ -50,7 +50,14 @@ class ArchiveType(str, enum.Enum):
 
 class RequesterType(str, enum.Enum):
     ADMIN = "admin"
+    USER = "user"
     GUEST = "guest"
+
+
+# The public desk's own records: site users are attributed as `user`,
+# anonymous visitors as `guest` — both visible to every non-admin, while
+# admin-owned rows only surface once their archive is ready.
+PUBLIC_REQUESTER_TYPES = (RequesterType.GUEST.value, RequesterType.USER.value)
 
 
 class AppSetting(Base):

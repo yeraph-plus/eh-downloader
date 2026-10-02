@@ -14,12 +14,28 @@ class LoginResponse(BaseModel):
     csrf_token: str
 
 
+class SessionPrices(BaseModel):
+    """The public pricing table (site credits, 0 = free): core-mode
+    visitors see it before they act, so the banner on the download desk
+    can quote exactly what the ledger will charge."""
+
+    create_original: int
+    create_resample: int
+    download_original: int
+    download_resample: int
+
+
 class SessionResponse(BaseModel):
-    authenticated: bool
-    role: Literal["admin", "guest", "none"]
-    csrf_token: str | None = None
-    guest_cache_access: bool
+    admin: bool
+    mode: Literal["admin", "guest", "core"]
     guest_download_mode: Literal["disabled", "resample", "original"]
+    site_identity: bool
+    core_configured: bool
+    core_login_url: str | None = None
+    prices: SessionPrices
+    # The admin's write token, so a reloaded settings page can keep
+    # mutating without a fresh password entry. Guests never get one.
+    csrf_token: str | None = None
 
 
 class TaskCreateRequest(BaseModel):
@@ -78,7 +94,9 @@ class AccountResponse(BaseModel):
 
 
 class SettingsResponse(BaseModel):
-    guest_cache_access: bool
+    access_mode: Literal["admin", "guest", "core"]
+    core_site_url: str
+    core_base_url: str
     guest_download_mode: Literal["disabled", "resample", "original"]
     cache_enabled: bool
     retention_days: int
@@ -86,16 +104,25 @@ class SettingsResponse(BaseModel):
     max_archive_size_mb: int
     worker_concurrency: int
     api_token_configured: bool
+    price_create_original: int
+    price_create_resample: int
+    price_download_original: int
+    price_download_resample: int
 
 
 class SettingsUpdateRequest(BaseModel):
-    guest_cache_access: bool
+    access_mode: Literal["admin", "guest", "core"]
+    core_site_url: str = Field(default="", max_length=255)
     guest_download_mode: Literal["disabled", "resample", "original"]
     cache_enabled: bool
     retention_days: int = Field(ge=0, le=3650)
     cache_limit_bytes: int = Field(ge=1024**3, le=10 * 1024**4)
     max_archive_size_mb: int = Field(ge=1, le=1024 * 1024)
     worker_concurrency: int = Field(ge=1, le=4)
+    price_create_original: int = Field(ge=0, le=1_000_000)
+    price_create_resample: int = Field(ge=0, le=1_000_000)
+    price_download_original: int = Field(ge=0, le=1_000_000)
+    price_download_resample: int = Field(ge=0, le=1_000_000)
 
 
 class TokenRotateResponse(BaseModel):

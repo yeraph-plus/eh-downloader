@@ -27,6 +27,14 @@ class Settings(BaseSettings):
     eh_request_timeout_seconds: float = Field(default=30.0, ge=5.0)
     secure_cookies: bool = False
 
+    # Site integration (`aiya/integrations/v1`): both the base URL (the
+    # site origin, no /wp-json suffix) and the service key must be set for
+    # the integration to come alive.
+    aiya_core_base_url: str = ""
+    aiya_core_service_key: str = ""
+    aiya_core_session_cookie: str = "aiya_session"
+    aiya_core_timeout_seconds: float = Field(default=5.0, ge=1.0)
+
     @field_validator("eh_proxy_url", mode="before")
     @classmethod
     def empty_proxy_is_none(cls, value: object) -> object:

@@ -10,6 +10,13 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from .aiya_core_integration import (
+    MODE_ADMIN,
+    MODE_CORE,
+    AiyaCoreIntegration,
+    AccessContext,
+    PUBLIC_REQUESTER_TYPES,
+)
 from .auth_service import AuthService, CookieFormatError
 from .cache_service import CacheService
 from .config import Settings, get_settings
@@ -43,7 +50,7 @@ class SPAStaticFiles(StaticFiles):
         return response
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
+def create_app(settings: Settings | None = None, core: AiyaCoreIntegration | None = None) -> FastAPI:
     settings = settings or get_settings()
     database = Database(settings)
     security = SecurityManager(settings)
@@ -52,6 +59,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     task_service = TaskService(settings)
     cache_service = CacheService(settings, store)
     delivery_service = DeliveryService(settings, database, store, auth_service)
+    core = core or AiyaCoreIntegration(settings)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -59,7 +67,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         database.create_all()
         yield
 
-    app = FastAPI(title="Eh Downloader", version="1.0.0", lifespan=lifespan)
+    # 文档服务始终可用：/docs（Swagger UI）、/redoc、/openapi.json 显式钉死，
+    # 不随部署形态变化（设置页「API远程调用」的接口文档链接依赖它）。
+    app = FastAPI(
+        title="Eh Downloader",
+        version="1.1.0",
+        lifespan=lifespan,
+        docs_url="/docs",
+        redoc_url="/redoc",
+        openapi_url="/openapi.json",
+    )
     app.state.settings = settings
     app.state.database = database
     app.state.security = security
@@ -68,6 +85,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.task_service = task_service
     app.state.cache_service = cache_service
     app.state.delivery_service = delivery_service
+    app.state.core = core
 
     def db_session():
         with database.session_factory() as session:
@@ -86,7 +104,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if request.method in {"GET", "HEAD", "OPTIONS"} or identity.kind == RequesterType.GUEST.value or identity.username == "api-token":
             return
         provided = request.headers.get("X-CSRF-Token", "")
-        if not hmac.compare_digest(provided, identity.csrf_token):
+        # compare_digest raises TypeError on non-ASCII str input; encode
+        # so a crafted header answers 403 instead of blowing up a 500.
+        if not hmac.compare_digest(provided.encode("utf-8"), identity.csrf_token.encode("utf-8")):
             raise HTTPException(status_code=403, detail="Invalid CSRF token")
 
     def require_admin(
@@ -95,7 +115,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         authorization: str | None = Header(default=None),
     ) -> SessionIdentity:
         identity = _bearer_identity(authorization, session) or security.parse_session(request.cookies.get("ehd_session"))
-        if not identity:
+        if not identity or identity.kind != RequesterType.ADMIN.value:
             raise HTTPException(status_code=401, detail="Administrator authentication required")
         _check_csrf(request, identity)
         return identity
@@ -104,29 +124,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         request: Request,
         session: Session = Depends(db_session),
         authorization: str | None = Header(default=None),
-    ) -> SessionIdentity:
-        identity = _bearer_identity(authorization, session) or security.parse_session(request.cookies.get("ehd_session"))
-        guest_access = store.get_guest_cache_access(session)
-        if not identity and guest_access:
-            identity = SessionIdentity(RequesterType.GUEST.value, "global", "")
-        if not identity:
-            raise HTTPException(status_code=401, detail="Authentication required")
-        _check_csrf(request, identity)
-        return identity
+    ) -> AccessContext:
+        admin_identity = _bearer_identity(authorization, session) or security.parse_session(
+            request.cookies.get("ehd_session")
+        )
+        configured_mode = store.get_access_mode(session)
+        return core.guard(request, admin_identity, lambda req: _check_csrf(req, admin_identity), configured_mode)
 
-    def _task_access(task: DownloadTask, identity: SessionIdentity, session: Session) -> bool:
-        if identity.kind == RequesterType.ADMIN.value:
+    def _task_access(task: DownloadTask, context: AccessContext, session: Session) -> bool:
+        if context.is_admin:
             return True
-        guest_access = store.get_guest_cache_access(session)
-        if not task_service.can_access(
-            task, identity.kind, guest_access=guest_access
-        ):
-            return False
+        # The public desk sees the guest/user records (attribution doubles
+        # as ownership — anonymous guests share one identity) plus every
+        # ready archive whose bytes are actually still there.
         if task.status not in {TaskStatus.COMPLETED.value, TaskStatus.WAITING_DOWNLOAD.value}:
-            return task.requester_type == RequesterType.GUEST.value
+            return task.requester_type in PUBLIC_REQUESTER_TYPES
         archive = task.archive
         if not archive:
-            return False
+            return task.requester_type in PUBLIC_REQUESTER_TYPES
         entry = archive.cache_entry
         if entry and entry.expire_at > utcnow():
             try:
@@ -139,11 +154,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             and archive.account
         ):
             return True
-        return False
+        return task.requester_type in PUBLIC_REQUESTER_TYPES
 
     @app.get("/health/live")
     def health_live() -> dict[str, str]:
         return {"status": "ok"}
+
+    def _set_session_cookie(response: Response, value: str, max_age: int) -> None:
+        response.set_cookie(
+            "ehd_session",
+            value,
+            httponly=True,
+            secure=settings.secure_cookies,
+            samesite="strict",
+            max_age=max_age,
+            path="/",
+        )
 
     @app.get("/health/ready")
     def health_ready(session: Session = Depends(db_session)) -> dict[str, str]:
@@ -152,20 +178,30 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/api/v1/auth/session", response_model=SessionResponse)
     def current_session(request: Request, session: Session = Depends(db_session)) -> SessionResponse:
-        admin = security.parse_session(request.cookies.get("ehd_session"))
-        guest_cache_access = store.get_guest_cache_access(session)
-        guest_download_mode = store.get_guest_download_mode(session)
-        if admin:
-            return SessionResponse(
-                authenticated=True, role="admin", csrf_token=admin.csrf_token,
-                guest_cache_access=guest_cache_access, guest_download_mode=guest_download_mode,
-            )
+        admin_identity = security.parse_session(request.cookies.get("ehd_session"))
+        is_admin = admin_identity is not None
+        mode = core.effective_mode(store.get_access_mode(session))
+        site_identity = False
+        if mode == MODE_CORE:
+            bearer = request.cookies.get(settings.aiya_core_session_cookie)
+            site_identity = core.resolve_site_identity(bearer) is not None
+        # The redirect link is page-configured only (no env fallback).
+        core_login_url = store.get_core_site_url(session) or None
+        prices = {
+            "create_original": store.get_price(session, SettingsStore.PRICE_CREATE_ORIGINAL_KEY),
+            "create_resample": store.get_price(session, SettingsStore.PRICE_CREATE_RESAMPLE_KEY),
+            "download_original": store.get_price(session, SettingsStore.PRICE_DOWNLOAD_ORIGINAL_KEY),
+            "download_resample": store.get_price(session, SettingsStore.PRICE_DOWNLOAD_RESAMPLE_KEY),
+        }
         return SessionResponse(
-            authenticated=False,
-            role="none",
-            csrf_token=None,
-            guest_cache_access=guest_cache_access,
-            guest_download_mode=guest_download_mode,
+            admin=is_admin,
+            mode=MODE_ADMIN if is_admin else mode,
+            guest_download_mode=store.get_guest_download_mode(session),
+            site_identity=site_identity,
+            core_configured=core.enabled(),
+            core_login_url=core_login_url,
+            prices=prices,
+            csrf_token=admin_identity.csrf_token if admin_identity else None,
         )
 
     @app.post("/api/v1/auth/login", response_model=LoginResponse)
@@ -173,29 +209,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if not security.verify_admin(payload.username, payload.password):
             raise HTTPException(status_code=401, detail="Invalid credentials")
         value, identity = security.create_session()
-        response.set_cookie(
-            "ehd_session",
-            value,
-            httponly=True,
-            secure=settings.secure_cookies,
-            samesite="strict",
-            max_age=settings.session_ttl_seconds,
-            path="/",
-        )
+        _set_session_cookie(response, value, settings.session_ttl_seconds)
         return LoginResponse(username=identity.username, csrf_token=identity.csrf_token)
 
     @app.post("/api/v1/auth/logout", status_code=204)
-    def logout(response: Response, _: SessionIdentity = Depends(require_admin)) -> Response:
+    def logout(response: Response, _: SessionIdentity = Depends(require_admin)) -> None:
+        # 204 + an explicit Response return makes FastAPI emit a response
+        # with a null status that uvicorn cannot even name — return None
+        # and let the declared status speak.
         response.delete_cookie("ehd_session", path="/")
-        return response
 
     @app.post("/api/v1/tasks", response_model=list[TaskResponse], status_code=status.HTTP_202_ACCEPTED)
     def create_task(
         payload: TaskCreateRequest,
-        identity: SessionIdentity = Depends(require_user),
+        context: AccessContext = Depends(require_user),
         session: Session = Depends(db_session),
     ) -> list[TaskResponse]:
-        if identity.kind == RequesterType.GUEST.value:
+        if not context.is_admin:
             guest_download_mode = store.get_guest_download_mode(session)
             if guest_download_mode == "disabled":
                 raise HTTPException(status_code=403, detail="Guest task creation is disabled")
@@ -217,10 +247,34 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if key not in seen:
                 galleries.append(gallery)
                 seen.add(key)
+        # Charged before anything is queued: the pre-check answers which
+        # galleries would actually create, and only after every charge
+        # stands does creation run — an insufficient balance on the last
+        # URL leaves nothing half-queued. The integration module owns the
+        # dedupe keys (gallery identity for fresh creations, task id in a
+        # 30-second window for requeues).
+        if not context.is_admin:
+            for gallery in galleries:
+                existing = task_service.find_existing(session, gallery, payload.archive_type)
+                if existing is None:
+                    core.charge(context, store, session, "create", payload.archive_type, gid=gallery.gid, token=gallery.token)
+                elif existing.status in {TaskStatus.FAILED.value, TaskStatus.EXPIRED.value}:
+                    core.charge(
+                        context, store, session, "requeue", payload.archive_type,
+                        gid=gallery.gid, token=gallery.token, task_id=existing.id,
+                    )
+        requester_type = RequesterType.ADMIN.value if context.is_admin else (
+            RequesterType.USER.value if context.site_user_id else RequesterType.GUEST.value
+        )
+        requester_id = (
+            context.admin_name if context.is_admin
+            else str(context.site_user_id) if context.site_user_id
+            else "global"
+        )
         tasks = []
         for gallery in galleries:
             task, created = task_service.create_or_existing(
-                session, gallery, payload.archive_type, identity.kind, identity.username
+                session, gallery, payload.archive_type, requester_type, requester_id
             )
             if created:
                 tasks.append(task)
@@ -229,41 +283,48 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/api/v1/tasks", response_model=list[TaskResponse])
     def list_tasks(
-        identity: SessionIdentity = Depends(require_user), session: Session = Depends(db_session)
+        context: AccessContext = Depends(require_user), session: Session = Depends(db_session)
     ) -> list[TaskResponse]:
-        guest_access = store.get_guest_cache_access(session)
         tasks = session.scalars(task_service.visible_query(
-            identity.kind, guest_access=guest_access
+            is_admin=context.is_admin
         )).all()
-        if identity.kind == RequesterType.GUEST.value:
-            tasks = [task for task in tasks if _task_access(task, identity, session)]
+        if not context.is_admin:
+            tasks = [task for task in tasks if _task_access(task, context, session)]
         return [task_response(task) for task in tasks]
 
     @app.get("/api/v1/tasks/{task_id}", response_model=TaskResponse)
     def get_task(
-        task_id: str, identity: SessionIdentity = Depends(require_user), session: Session = Depends(db_session)
+        task_id: str, context: AccessContext = Depends(require_user), session: Session = Depends(db_session)
     ) -> TaskResponse:
         task = session.get(DownloadTask, task_id)
-        if not task or not _task_access(task, identity, session):
+        if not task or not _task_access(task, context, session):
             raise HTTPException(status_code=404, detail="Task not found")
         return task_response(task)
 
     @app.get("/api/v1/tasks/{task_id}/download")
     def download_task(
-        task_id: str, identity: SessionIdentity = Depends(require_user), session: Session = Depends(db_session)
+        task_id: str, context: AccessContext = Depends(require_user), session: Session = Depends(db_session)
     ) -> Response:
         task = session.get(DownloadTask, task_id)
-        if not task or not _task_access(task, identity, session):
+        if not task or not _task_access(task, context, session):
             raise HTTPException(status_code=404, detail="Task not found")
         archive = task.archive
         entry = archive.cache_entry if archive else None
         if task.status not in {TaskStatus.COMPLETED.value, TaskStatus.WAITING_DOWNLOAD.value} or not archive:
             raise HTTPException(status_code=409, detail="Archive is not ready")
+        # The charge lands only after the delivery is certain (relay
+        # prepared / cache file confirmed) and before the first byte
+        # moves — the integration module owns the price, the dedupe
+        # window and the anonymous refusal.
         if not entry and not archive.cache_enabled and archive.remote_download_url and archive.account:
             try:
                 delivery = delivery_service.prepare_remote(session, task)
             except DeliveryError as exc:
                 raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+            core.charge(
+                context, store, session, "download", task.archive_type,
+                task_id=task.id, download_seq=task.download_count + 1,
+            )
             return StreamingResponse(
                 delivery_service.stream(delivery),
                 media_type="application/zip",
@@ -278,6 +339,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if not path.is_file():
             cache_service.remove_entry(session, entry)
             raise HTTPException(status_code=410, detail="Cached archive is no longer available")
+        core.charge(
+            context, store, session, "download", task.archive_type,
+            task_id=task.id, download_seq=task.download_count + 1,
+        )
         entry.last_accessed_at = utcnow()
         task.download_count += 1
         session.commit()
@@ -347,7 +412,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         account_id: str,
         _: SessionIdentity = Depends(require_admin),
         session: Session = Depends(db_session),
-    ) -> Response:
+    ) -> None:
         account = session.get(Account, account_id)
         if not account:
             raise HTTPException(status_code=404, detail="Account not found")
@@ -361,11 +426,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=409, detail="Account is assigned to an active task; disable it instead")
         session.delete(account)
         session.commit()
-        return Response(status_code=204)
 
     @app.get("/api/v1/settings", response_model=SettingsResponse)
     def get_settings_api(_: SessionIdentity = Depends(require_admin), session: Session = Depends(db_session)):
-        return settings_response(session, store)
+        return settings_response(session, store, settings.aiya_core_base_url)
 
     @app.put("/api/v1/settings", response_model=SettingsResponse)
     def update_settings_api(
@@ -375,7 +439,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     ):
         store.update_public_settings(session, **payload.model_dump())
         session.commit()
-        return settings_response(session, store)
+        return settings_response(session, store, settings.aiya_core_base_url)
 
     @app.post("/api/v1/settings/api-token/rotate", response_model=TokenRotateResponse)
     def rotate_api_token(_: SessionIdentity = Depends(require_admin), session: Session = Depends(db_session)):
@@ -441,9 +505,11 @@ def account_response(account: Account) -> AccountResponse:
     )
 
 
-def settings_response(session: Session, store: SettingsStore) -> SettingsResponse:
+def settings_response(session: Session, store: SettingsStore, core_base_url: str) -> SettingsResponse:
     return SettingsResponse(
-        guest_cache_access=store.get_guest_cache_access(session),
+        access_mode=store.get_access_mode(session),
+        core_site_url=store.get_core_site_url(session),
+        core_base_url=core_base_url,
         guest_download_mode=store.get_guest_download_mode(session),
         cache_enabled=store.get_cache_enabled(session),
         retention_days=store.get_retention_days(session),
@@ -451,6 +517,10 @@ def settings_response(session: Session, store: SettingsStore) -> SettingsRespons
         max_archive_size_mb=store.get_max_archive_size_mb(session),
         worker_concurrency=store.get_worker_concurrency(session),
         api_token_configured=store.get_api_token_hash(session) is not None,
+        price_create_original=store.get_price(session, SettingsStore.PRICE_CREATE_ORIGINAL_KEY),
+        price_create_resample=store.get_price(session, SettingsStore.PRICE_CREATE_RESAMPLE_KEY),
+        price_download_original=store.get_price(session, SettingsStore.PRICE_DOWNLOAD_ORIGINAL_KEY),
+        price_download_resample=store.get_price(session, SettingsStore.PRICE_DOWNLOAD_RESAMPLE_KEY),
     )
 
 

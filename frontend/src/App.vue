@@ -1,14 +1,16 @@
 <script setup lang="ts">
-import { computed, h, onBeforeUnmount, onMounted, ref } from 'vue'
-import { NAlert, NButton, NDataTable, NInput, NInputNumber, NProgress, NRadioButton, NRadioGroup, NSwitch, NTag, useMessage, type DataTableColumns } from 'naive-ui'
-import { Download, Languages, LogOut, RefreshCw, Settings as SettingsIcon, Upload, UserRound, X } from '@lucide/vue'
+import { computed, h, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { NAlert, NButton, NDataTable, NInput, NInputNumber, NModal, NProgress, NRadioButton, NRadioGroup, NSwitch, NTag, useMessage, type DataTableColumns } from 'naive-ui'
+import { BookOpen, Download, ExternalLink, KeyRound, Languages, Lock, LogIn, LogOut, Plus, RefreshCw, Save, Settings as SettingsIcon, Upload, UserRound, X } from '@lucide/vue'
 import { api, ApiError, clearCsrfToken, setCsrfToken } from './api'
-import type { Account, ArchiveType, GuestDownloadMode, SessionState, Settings, Task } from './types'
+import type { AccessMode, Account, ArchiveType, GuestDownloadMode, SessionState, Settings, Task } from './types'
 
 const copy = {
   adminLogin: ['管理员登录', 'Administrator sign in'], username: ['用户名', 'Username'], password: ['密码', 'Password'], login: ['登录', 'Sign in'],
-  guestAccess: ['游客访问', 'Continue as guest'], backToLogin: ['返回登录', 'Back to sign in'],
-  downloads: ['下载', 'Downloads'], settings: ['设置', 'Settings'], logout: ['退出', 'Sign out'], guest: ['游客', 'Guest'],
+  loginEntry: ['管理员登录', 'Administrator sign in'],
+  guestAccess: ['游客访问', 'Continue as guest'],
+  siteLogin: ['回主站登录', 'Sign in on the site'],
+  downloads: ['下载', 'Downloads'], settings: ['设置', 'Settings'], logout: ['退出', 'Sign out'],
   resample: ['重采样归档', 'Resample archive'], original: ['原始归档', 'Original archive'], addTask: ['添加任务', 'Add tasks'],
   galleryUrls: ['画廊链接，每行一个', 'Gallery URLs, one per line'],
   invalidGalleryUrl: ['画廊链接格式无效，仅支持 EH/ExHentai HTTPS 画廊地址', 'Invalid gallery URL. Only HTTPS EH/ExHentai gallery links are supported'],
@@ -19,7 +21,19 @@ const copy = {
   cookieHelp: ['使用标准 Netscape cookies.txt；可通过 Get cookies.txt LOCALLY 浏览器插件导出。', 'Import a standard Netscape cookies.txt file. You can export one with the Get cookies.txt LOCALLY browser extension.'],
   account: ['账户', 'Account'], unknown: ['未知', 'Unknown'], lastDownload: ['上次下载', 'Last download'], lastUsed: ['上次使用', 'Last used'], enabled: ['启用', 'Enabled'], deleteAccount: ['删除账户', 'Delete account'],
   systemSettings: ['系统设置', 'System settings'], workerReads: ['独立 Worker 会在下一轮读取新设置', 'The worker reads changes on its next cycle'],
-  guestCacheAccess: ['游客访问归档列表', 'Guest archive access'], guestCacheAccessDesc: ['公开有效的本地缓存或 EH 远程中转归档；关闭后同时禁止游客创建任务。', 'Expose valid local caches or EH relay archives. Turning this off also disables guest task creation.'],
+  accessMode: ['访问模式', 'Access mode'],
+  accessModeAdmin: ['仅管理员', 'Admin only'],
+  accessModeGuest: ['开放游客', 'Open guest desk'],
+  accessModeCore: ['AIYA CMS 线上集成', 'AIYA CMS integration'],
+  accessModeDesc: ['admin：公开面关闭，仅管理员可用；guest：经典游客下载台（不扣费）；core：同样的游客行为，叠加前台站登录与积分扣费。', 'admin: the public desk is closed; guest: the classic free download desk; core: the same guest behavior with site sign-in and credit billing on top.'],
+  gateLoginHint: ['请先登录', 'Please sign in first'],
+  integrationNotConfigured: ['站点集成未接通（AIYA_CORE_BASE_URL / AIYA_CORE_SERVICE_KEY 未配置），当前按开放游客模式运行。', 'The site integration is not configured (AIYA_CORE_BASE_URL / AIYA_CORE_SERVICE_KEY missing) — running as an open guest desk.'],
+  coreSiteUrl: ['认证主站链接', 'Site URL'],
+  coreSiteUrlDesc: ['用于「回主站登录」的跳转地址；留空则按钮不可用。', 'The jump target of the "Sign in on the site" button; leave empty to disable it.'],
+  billingEndpoint: ['扣费接口', 'Billing endpoint'],
+  billingEndpointDesc: ['站点侧需要暴露的积分扣费端点，供本服务在创建/下载时调用。', 'The credit-spend endpoint the site exposes; called on creation and download.'],
+  apiDocs: ['接口文档', 'API docs'],
+  apiDocsDesc: ['本服务的 OpenAPI 文档（Swagger UI），始终可用。', 'The OpenAPI docs of this service (Swagger UI), always available.'],
   guestDownloads: ['游客创建下载', 'Guest downloads'], guestDownloadsDesc: ['所有游客共享一个公共身份；此项仅控制新任务类型。', 'All guests share one public identity. This controls only the type of new tasks.'],
   guestDisabled: ['完全禁止', 'Disabled'],
   enableCache: ['启用本地缓存', 'Local cache'], enableCacheDesc: ['开启时下载并校验 ZIP 后保存；关闭时不落盘，由 API 实时中转 EH 下载。', 'When enabled, verified ZIP files are stored locally. When disabled, the API relays each EH download without storing it.'],
@@ -27,8 +41,19 @@ const copy = {
   cacheLimit: ['缓存上限 GiB', 'Cache limit (GiB)'], cacheLimitDesc: ['缓存文件、下载中的临时文件和容量预留共享此上限。', 'Cached files, active temporary downloads, and capacity reservations share this limit.'],
   archiveLimit: ['最大归档大小 MB', 'Maximum archive size (MB)'], archiveLimitDesc: ['在向 EH 提交归档请求前按页面估算大小检查，默认 4096 MB。', 'Checked against the page estimate before submitting the archive request to EH. Default: 4096 MB.'],
   concurrency: ['下载并发', 'Download concurrency'], concurrencyDesc: ['单 Worker 内同时处理的下载数量，允许 1-4。', 'Concurrent downloads in the single worker. Allowed range: 1-4.'],
+  priceCreateOriginal: ['原始归档创建单价', 'Create price (original)'],
+  priceCreateResample: ['重采样归档创建单价', 'Create price (resample)'],
+  priceDownloadOriginal: ['原始归档下载单价', 'Download price (original)'],
+  priceDownloadResample: ['重采样归档下载单价', 'Download price (resample)'],
+  priceUnit: ['站点积分', 'site credits'],
+  priceTitle: ['下载会消耗你的站点积分，当前单价：', 'Downloads consume your site credits. Current unit prices:'],
+  priceOriginalCreate: ['原始归档创建任务', 'Original archive creation'],
+  priceResampleCreate: ['重采样归档创建任务', 'Resample archive creation'],
+  priceOriginalDownload: ['原始归档下载', 'Original archive download'],
+  priceResampleDownload: ['重采样归档下载', 'Resample archive download'],
+  pricePerUse: ['积分/次', 'credits/use'],
   saveSettings: ['保存设置', 'Save settings'], saved: ['设置已保存', 'Settings saved'], queued: ['任务已进入队列', 'Task added to queue'], accountImported: ['账户已加入账户池', 'Account added'],
-  apiToken: ['API Token', 'API token'], tokenDesc: ['管理员权限；轮换后旧 Token 立即失效', 'Administrator access; rotating immediately revokes the previous token'],
+  apiToken: ['API远程调用', 'Remote API'], tokenDesc: ['管理员权限；轮换后旧 Token 立即失效', 'Administrator access; rotating immediately revokes the previous token'],
   rotateToken: ['轮换 Token', 'Rotate token'], createToken: ['创建 Token', 'Create token'], shownOnce: ['仅显示一次', 'Shown once'],
   free: ['免费', 'Free'], language: ['切换到 English', 'Switch to Chinese'],
   queuedStatus: ['排队', 'Queued'], checkingCache: ['检查缓存', 'Checking cache'], requestingArchive: ['请求归档', 'Requesting archive'],
@@ -49,16 +74,22 @@ function toggleLocale() {
 
 const message = useMessage()
 const ready = ref(false)
-const role = ref<'admin' | 'guest' | 'none'>('none')
+const role = ref<'admin' | 'guest'>('guest')
+const guestEntered = ref(false)
 const activePage = ref<'downloads' | 'settings'>('downloads')
 const error = ref('')
 const username = ref('')
 const password = ref('')
 const loginLoading = ref(false)
+const showLoginModal = ref(false)
 const galleryUrls = ref('')
 const archiveType = ref<ArchiveType>('resample')
 const guestDownloadMode = ref<GuestDownloadMode>('disabled')
-const guestCacheAccess = ref(false)
+const accessMode = ref<AccessMode>('admin')
+const siteIdentity = ref(false)
+const prices = ref<SessionState['prices']>({ create_original: 0, create_resample: 0, download_original: 0, download_resample: 0 })
+const coreConfigured = ref(false)
+const coreLoginUrl = ref<string | null>(null)
 const submitting = ref(false)
 const loading = ref(false)
 const tasks = ref<Task[]>([])
@@ -71,7 +102,35 @@ const revealedToken = ref('')
 let pollTimer: number | undefined
 
 const isAdmin = computed(() => role.value === 'admin')
-const canCreateTask = computed(() => isAdmin.value || guestDownloadMode.value !== 'disabled')
+const canCreateTask = computed(() =>
+  isAdmin.value ||
+  (accessMode.value !== 'admin' && guestDownloadMode.value !== 'disabled' && (accessMode.value !== 'core' || siteIdentity.value)),
+)
+const integrationDegraded = computed(() => settings.value?.access_mode === 'core' && !coreConfigured.value)
+/** 线上集成模式的计价横幅：付费项橙色徽章、免费项绿色徽章（0 积分）。 */
+function priceBadge(value: number): string {
+  return value > 0 ? `${value} ${t('pricePerUse')}` : t('free')
+}
+function priceBadgeType(value: number): 'warning' | 'success' {
+  return value > 0 ? 'warning' : 'success'
+}
+const apiDocsUrl = computed(() => {
+  const pathname = window.location.pathname
+  const base = pathname.endsWith('/') ? pathname : pathname + '/'
+  return base + 'docs'
+})
+
+/** 前置门禁：加载态之后、应用壳之前单独执行。admin 模式强制登录（首页
+ *  不加载）；core 模式先做 cookie 状态检测，未登录（含封禁）挡在门禁显示
+ *  「回主站登录」；guest 模式点「游客访问」进入；管理员会话始终直通。 */
+const showGate = computed(() => {
+  if (!ready.value || isAdmin.value) return false
+  // guest 模式直接进主页；admin 模式强制登录（首页不加载）；core 模式
+  // 先做 cookie 检测，未登录挡在门禁显示「回主站登录」。
+  if (accessMode.value === 'guest') return false
+  if (accessMode.value === 'admin') return true
+  return !siteIdentity.value
+})
 const statusMeta = computed<Record<string, { label: string; type: 'default' | 'info' | 'success' | 'warning' | 'error' }>>(() => ({
   queued: { label: t('queuedStatus'), type: 'default' }, checking_cache: { label: t('checkingCache'), type: 'info' },
   requesting_archive: { label: t('requestingArchive'), type: 'info' }, archive_pending: { label: t('archivePending'), type: 'warning' },
@@ -126,51 +185,51 @@ const accountColumns = computed<DataTableColumns<Account>>(() => [
   { title: '', key: 'actions', width: 50, align: 'right', render: (row) => h(NButton, { quaternary: true, circle: true, title: t('deleteAccount'), onClick: () => deleteAccount(row.id) }, { icon: () => h(X, { size: 17 }) }) },
 ])
 
+function applySession(state: SessionState) {
+  role.value = state.admin ? 'admin' : 'guest'
+  accessMode.value = state.mode
+  guestDownloadMode.value = state.guest_download_mode
+  siteIdentity.value = state.site_identity
+  coreConfigured.value = state.core_configured
+  coreLoginUrl.value = state.core_login_url
+  prices.value = state.prices
+  if (state.csrf_token) setCsrfToken(state.csrf_token)
+  syncArchiveType()
+}
+
+function syncPolling() {
+  // 门禁挡在前面时不打任务列表接口（admin 模式下它是 401）。
+  if (ready.value && !showGate.value) startPolling()
+  else stopPolling()
+}
+
 async function initialize() {
   try {
     const state = await api<SessionState>('/api/v1/auth/session')
-    role.value = state.role
-    guestCacheAccess.value = state.guest_cache_access
-    guestDownloadMode.value = state.guest_download_mode
-    if (state.role === 'guest' && state.guest_download_mode !== 'disabled') archiveType.value = state.guest_download_mode
-    if (state.csrf_token) setCsrfToken(state.csrf_token)
-    if (state.authenticated) { await refreshAll(); startPolling() }
-  } catch (cause) { error.value = (cause as Error).message } finally { ready.value = true }
+    applySession(state)
+    syncArchiveType()
+    if (isAdmin.value) {
+      const [rows, current] = await Promise.all([api<Account[]>('/api/v1/accounts'), api<Settings>('/api/v1/settings')])
+      accounts.value = rows; settings.value = current
+    } else {
+      await refreshTasks()
+    }
+  } catch (cause) { error.value = (cause as Error).message } finally {
+    ready.value = true
+    syncPolling()
+  }
 }
 
-async function enterGuest() {
-  role.value = 'guest'
-  error.value = ''
-  if (guestDownloadMode.value !== 'disabled') archiveType.value = guestDownloadMode.value
-  await refreshTasks()
-  startPolling()
-}
-
-function leaveGuest() {
-  stopPolling()
-  tasks.value = []
-  role.value = 'none'
-}
-
-async function login() {
-  loginLoading.value = true; error.value = ''
-  try {
-    const result = await api<{ csrf_token: string }>('/api/v1/auth/login', { method: 'POST', body: JSON.stringify({ username: username.value, password: password.value }) })
-    setCsrfToken(result.csrf_token); role.value = 'admin'; password.value = ''; await refreshAll(); startPolling()
-  } catch (cause) { error.value = (cause as Error).message } finally { loginLoading.value = false }
-}
-
-async function logout() {
-  try { await api('/api/v1/auth/logout', { method: 'POST' }) } finally {
-    clearCsrfToken(); tasks.value = []; settings.value = null; stopPolling()
-    const state = await api<SessionState>('/api/v1/auth/session')
-    role.value = state.role; guestCacheAccess.value = state.guest_cache_access; guestDownloadMode.value = state.guest_download_mode
+/** 非 admin 的归档类型跟随访问模式锁（档位配置为 original 时不同步则每次提交都 403）。 */
+function syncArchiveType() {
+  if (!isAdmin.value && guestDownloadMode.value !== 'disabled') {
+    archiveType.value = guestDownloadMode.value
   }
 }
 
 async function refreshTasks() {
   try { tasks.value = await api<Task[]>('/api/v1/tasks') }
-  catch (cause) { if (!(cause instanceof ApiError && cause.status === 401)) error.value = (cause as Error).message }
+  catch (cause) { if (!(cause instanceof ApiError && (cause.status === 401 || cause.status === 403))) error.value = (cause as Error).message }
 }
 
 async function refreshAll() {
@@ -182,6 +241,36 @@ async function refreshAll() {
       accounts.value = rows; settings.value = current
     }
   } finally { loading.value = false }
+}
+
+function enterGuest() {
+  guestEntered.value = true
+  refreshTasks()
+  syncPolling()
+}
+
+async function login() {
+  loginLoading.value = true; error.value = ''
+  try {
+    const result = await api<{ username: string; csrf_token: string }>('/api/v1/auth/login', { method: 'POST', body: JSON.stringify({ username: username.value, password: password.value }) })
+    setCsrfToken(result.csrf_token); role.value = 'admin'; password.value = ''; showLoginModal.value = false
+    accessMode.value = 'admin'
+    guestEntered.value = true
+    const [rows, current] = await Promise.all([api<Account[]>('/api/v1/accounts'), api<Settings>('/api/v1/settings')])
+    accounts.value = rows; settings.value = current
+    syncPolling()
+  } catch (cause) { error.value = (cause as Error).message } finally { loginLoading.value = false }
+}
+
+async function logout() {
+  try { await api('/api/v1/auth/logout', { method: 'POST' }) } finally {
+    clearCsrfToken(); tasks.value = []; settings.value = null; accounts.value = []
+    activePage.value = 'downloads'
+    guestEntered.value = false
+    const state = await api<SessionState>('/api/v1/auth/session')
+    applySession(state)
+    syncPolling()
+  }
 }
 
 async function createTask() {
@@ -208,28 +297,32 @@ async function importAccount() {
 function selectCookieFile(event: Event) { cookieFile.value = (event.target as HTMLInputElement).files?.[0] || null }
 async function updateAccount(id: string, payload: Record<string, unknown>) { await api(`/api/v1/accounts/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }); accounts.value = await api<Account[]>('/api/v1/accounts') }
 async function deleteAccount(id: string) { try { await api(`/api/v1/accounts/${id}`, { method: 'DELETE' }); accounts.value = await api<Account[]>('/api/v1/accounts') } catch (cause) { error.value = (cause as Error).message } }
-async function saveSettings() { if (!settings.value) return; saving.value = true; try { if (!settings.value.guest_cache_access) settings.value.guest_download_mode = 'disabled'; settings.value = await api<Settings>('/api/v1/settings', { method: 'PUT', body: JSON.stringify(settings.value) }); message.success(t('saved')) } catch (cause) { error.value = (cause as Error).message } finally { saving.value = false } }
+async function saveSettings() { if (!settings.value) return; saving.value = true; try { settings.value = await api<Settings>('/api/v1/settings', { method: 'PUT', body: JSON.stringify(settings.value) }); message.success(t('saved')) } catch (cause) { error.value = (cause as Error).message } finally { saving.value = false } }
 async function rotateToken() { const result = await api<{ token: string }>('/api/v1/settings/api-token/rotate', { method: 'POST' }); revealedToken.value = result.token }
 function startPolling() { stopPolling(); pollTimer = window.setInterval(refreshTasks, 3000) }
 function stopPolling() { if (pollTimer) window.clearInterval(pollTimer); pollTimer = undefined }
 onMounted(initialize)
 onBeforeUnmount(stopPolling)
+
+// 门禁恢复时设置入口一并隐藏：非管理员回到下载页
+watch(isAdmin, (value) => { if (!value) activePage.value = 'downloads' })
 </script>
 
 <template>
   <div v-if="!ready" class="loading-screen">Eh Downloader</div>
-  <main v-else-if="role === 'none'" class="login-shell">
-    <n-button class="login-language" quaternary :title="t('language')" @click="toggleLocale"><template #icon><languages :size="17" /></template>{{ locale === 'zh-CN' ? 'EN' : '中文' }}</n-button>
+
+  <!-- 前置门禁：全屏居中，按访问模式切换内容 -->
+  <main v-else-if="showGate" class="login-shell">
+    <div class="login-topbar">
+      <n-button quaternary circle :title="t('loginEntry')" @click="showLoginModal = true"><template #icon><log-in :size="18" /></template></n-button>
+      <n-button class="login-language" quaternary :title="t('language')" @click="toggleLocale"><template #icon><languages :size="17" /></template>{{ locale === 'zh-CN' ? 'EN' : '中文' }}</n-button>
+    </div>
     <section class="login-panel">
       <div class="brand-lockup"><span class="brand-mark">E</span><span>Eh Downloader</span></div>
-      <h1>{{ t('adminLogin') }}</h1>
-      <form class="login-form" @submit.prevent="login">
-        <label>{{ t('username') }}<n-input v-model:value="username" autocomplete="username" /></label>
-        <label>{{ t('password') }}<n-input v-model:value="password" type="password" show-password-on="click" autocomplete="current-password" /></label>
-        <n-alert v-if="error" type="error" :show-icon="false">{{ error }}</n-alert>
-        <n-button type="primary" attr-type="submit" :loading="loginLoading" block>{{ t('login') }}</n-button>
-        <n-button secondary attr-type="button" block :disabled="!guestCacheAccess" @click="enterGuest"><template #icon><user-round :size="17" /></template>{{ t('guestAccess') }}</n-button>
-      </form>
+      <!-- 三模式互斥：只渲染当前模式对应的按钮/提示，管理员经右上角图标弹窗登录 -->
+      <div v-if="accessMode === 'admin'" class="gate-hint"><lock :size="15" />{{ t('gateLoginHint') }}</div>
+      <n-button v-else-if="accessMode === 'core'" tag="a" :href="coreLoginUrl || undefined" :disabled="!coreLoginUrl" secondary attr-type="button" block><template #icon><external-link :size="16" /></template>{{ t('siteLogin') }}</n-button>
+      <n-button v-else-if="accessMode === 'guest'" secondary attr-type="button" block @click="enterGuest"><template #icon><user-round :size="16" /></template>{{ t('guestAccess') }}</n-button>
     </section>
   </main>
 
@@ -243,15 +336,13 @@ onBeforeUnmount(stopPolling)
       <div class="top-actions">
         <n-button quaternary size="small" :title="t('language')" @click="toggleLocale"><template #icon><languages :size="17" /></template>{{ locale === 'zh-CN' ? 'EN' : '中文' }}</n-button>
         <n-button v-if="isAdmin" quaternary circle :title="t('logout')" @click="logout"><template #icon><log-out :size="18" /></template></n-button>
-        <template v-else>
-          <span class="guest-label">{{ t('guest') }}</span>
-          <n-button quaternary circle :title="t('backToLogin')" @click="leaveGuest"><template #icon><log-out :size="18" /></template></n-button>
-        </template>
+        <n-button v-else quaternary circle :title="t('loginEntry')" @click="showLoginModal = true"><template #icon><log-in :size="18" /></template></n-button>
       </div>
     </header>
 
     <main class="content">
       <n-alert v-if="error" type="error" closable :show-icon="false" @close="error = ''">{{ error }}</n-alert>
+
       <template v-if="activePage === 'downloads'">
         <section v-if="canCreateTask" class="submit-band">
           <n-input v-model:value="galleryUrls" type="textarea" :autosize="{ minRows: 3, maxRows: 10 }" :placeholder="`https://e-hentai.org/g/{gid}/{token}/\n${t('galleryUrls')}`" />
@@ -260,16 +351,26 @@ onBeforeUnmount(stopPolling)
               <n-radio-button value="resample">{{ t('resample') }}</n-radio-button>
               <n-radio-button value="original">{{ t('original') }}</n-radio-button>
             </n-radio-group>
-            <n-button type="primary" :loading="submitting" :disabled="!galleryUrls.trim()" @click="createTask">{{ t('addTask') }}</n-button>
+            <n-button type="primary" :loading="submitting" :disabled="!galleryUrls.trim()" @click="createTask"><template #icon><plus :size="16" /></template>{{ t('addTask') }}</n-button>
           </div>
         </section>
+        <div v-if="accessMode === 'core'" class="price-banner">
+          <div class="price-title">{{ t('priceTitle') }}</div>
+          <ul class="price-list">
+            <li><span>{{ t('priceOriginalCreate') }}</span><n-tag :type="priceBadgeType(prices.create_original)" size="small" :bordered="false">{{ priceBadge(prices.create_original) }}</n-tag></li>
+            <li><span>{{ t('priceResampleCreate') }}</span><n-tag :type="priceBadgeType(prices.create_resample)" size="small" :bordered="false">{{ priceBadge(prices.create_resample) }}</n-tag></li>
+            <li><span>{{ t('priceOriginalDownload') }}</span><n-tag :type="priceBadgeType(prices.download_original)" size="small" :bordered="false">{{ priceBadge(prices.download_original) }}</n-tag></li>
+            <li><span>{{ t('priceResampleDownload') }}</span><n-tag :type="priceBadgeType(prices.download_resample)" size="small" :bordered="false">{{ priceBadge(prices.download_resample) }}</n-tag></li>
+          </ul>
+        </div>
         <section class="table-section">
           <div class="section-heading"><div><h1>{{ t('tasks') }}</h1><span>{{ tasks.length }} {{ t('items') }}</span></div><n-button quaternary circle :title="t('refresh')" :loading="loading" @click="refreshAll"><template #icon><refresh-cw :size="18" /></template></n-button></div>
           <n-data-table :columns="taskColumns" :data="tasks" :loading="loading" :row-key="(row: Task) => row.id" :bordered="false" />
         </section>
       </template>
 
-      <template v-else-if="isAdmin && settings">
+      <template v-else-if="activePage === 'settings' && isAdmin && settings">
+
         <section class="settings-section">
           <div class="section-heading"><div><h1>{{ t('accountPool') }}</h1><span>{{ t('cookieHidden') }}</span></div></div>
           <div class="account-import">
@@ -280,25 +381,58 @@ onBeforeUnmount(stopPolling)
           <p class="settings-note">{{ t('cookieHelp') }}</p>
           <n-data-table :columns="accountColumns" :data="accounts" :row-key="(row: Account) => row.id" :bordered="false" />
         </section>
+
         <section class="settings-section">
           <div class="section-heading"><div><h1>{{ t('systemSettings') }}</h1><span>{{ t('workerReads') }}</span></div></div>
           <div class="settings-list">
             <div class="setting-row"><div><strong>{{ t('enableCache') }}</strong><span>{{ t('enableCacheDesc') }}</span></div><n-switch v-model:value="settings.cache_enabled" /></div>
-            <div class="setting-row"><div><strong>{{ t('guestCacheAccess') }}</strong><span>{{ t('guestCacheAccessDesc') }}</span></div><n-switch v-model:value="settings.guest_cache_access" /></div>
-            <div class="setting-row"><div><strong>{{ t('guestDownloads') }}</strong><span>{{ t('guestDownloadsDesc') }}</span></div><n-radio-group v-model:value="settings.guest_download_mode" size="small" :disabled="!settings.guest_cache_access"><n-radio-button value="disabled">{{ t('guestDisabled') }}</n-radio-button><n-radio-button value="resample">{{ t('resample') }}</n-radio-button><n-radio-button value="original">{{ t('original') }}</n-radio-button></n-radio-group></div>
             <div class="setting-row"><div><strong>{{ t('retention') }}</strong><span>{{ t('retentionDesc') }}</span></div><n-input-number v-model:value="settings.retention_days" :min="0" :max="3650" :disabled="!settings.cache_enabled" /></div>
             <div class="setting-row"><div><strong>{{ t('cacheLimit') }}</strong><span>{{ t('cacheLimitDesc') }}</span></div><n-input-number :value="Math.round(settings.cache_limit_bytes / 1024 ** 3)" :min="1" :max="10240" :disabled="!settings.cache_enabled" @update:value="(v) => v && (settings!.cache_limit_bytes = v * 1024 ** 3)" /></div>
             <div class="setting-row"><div><strong>{{ t('archiveLimit') }}</strong><span>{{ t('archiveLimitDesc') }}</span></div><n-input-number v-model:value="settings.max_archive_size_mb" :min="1" :max="1048576" /></div>
             <div class="setting-row"><div><strong>{{ t('concurrency') }}</strong><span>{{ t('concurrencyDesc') }}</span></div><n-input-number v-model:value="settings.worker_concurrency" :min="1" :max="4" /></div>
           </div>
-          <div class="settings-actions"><n-button type="primary" :loading="saving" @click="saveSettings">{{ t('saveSettings') }}</n-button></div>
+          <div class="settings-actions"><n-button type="primary" :loading="saving" @click="saveSettings"><template #icon><save :size="16" /></template>{{ t('saveSettings') }}</n-button></div>
         </section>
+
         <section class="settings-section">
           <div class="section-heading"><div><h1>{{ t('apiToken') }}</h1><span>{{ t('tokenDesc') }}</span></div></div>
-          <div class="settings-actions token-action"><n-button @click="rotateToken">{{ settings.api_token_configured ? t('rotateToken') : t('createToken') }}</n-button></div>
+          <div class="settings-list">
+            <div class="setting-row"><div><strong>{{ t('apiDocs') }}</strong><span>{{ t('apiDocsDesc') }}</span></div><n-button tag="a" :href="apiDocsUrl" target="_blank" rel="noreferrer" secondary><template #icon><book-open :size="16" /></template>{{ t('apiDocs') }}</n-button></div>
+          </div>
+          <div class="settings-actions token-action"><n-button @click="rotateToken"><template #icon><key-round :size="16" /></template>{{ settings.api_token_configured ? t('rotateToken') : t('createToken') }}</n-button></div>
           <n-alert v-if="revealedToken" class="token-alert" type="warning" :title="t('shownOnce')"><span class="mono">{{ revealedToken }}</span></n-alert>
+        </section>
+
+        <section class="settings-section">
+          <div class="section-heading"><div><h1>{{ t('accessMode') }}</h1><span>{{ t('accessModeDesc') }}</span></div></div>
+          <n-alert v-if="integrationDegraded" type="warning" :show-icon="false">{{ t('integrationNotConfigured') }}</n-alert>
+          <div class="settings-list">
+            <div class="setting-row"><div><strong>{{ t('accessMode') }}</strong></div><n-radio-group v-model:value="settings.access_mode" name="access-mode"><n-radio-button value="admin">{{ t('accessModeAdmin') }}</n-radio-button><n-radio-button value="guest">{{ t('accessModeGuest') }}</n-radio-button><n-radio-button value="core">{{ t('accessModeCore') }}</n-radio-button></n-radio-group></div>
+            <div class="setting-row"><div><strong>{{ t('coreSiteUrl') }}</strong><span>{{ t('coreSiteUrlDesc') }}</span></div><n-input v-model:value="settings.core_site_url" placeholder="https://" :maxlength="255" :disabled="settings.access_mode !== 'core'" /></div>
+            <div class="setting-row"><div><strong>{{ t('billingEndpoint') }}</strong><span>{{ t('billingEndpointDesc') }}</span></div><span class="mono" style="word-break: break-all;">{{ settings.core_base_url ? settings.core_base_url + '/wp-json/aiya/integrations/v1/credits/spend' : '—' }}</span></div>
+            <div class="setting-row"><div><strong>{{ t('guestDownloads') }}</strong><span>{{ t('guestDownloadsDesc') }}</span></div><n-radio-group v-model:value="settings.guest_download_mode" size="small" :disabled="settings.access_mode === 'admin'"><n-radio-button value="disabled">{{ t('guestDisabled') }}</n-radio-button><n-radio-button value="resample">{{ t('resample') }}</n-radio-button><n-radio-button value="original">{{ t('original') }}</n-radio-button></n-radio-group></div>
+            <div class="setting-row"><div><strong>{{ t('priceCreateOriginal') }}</strong><span>{{ t('priceUnit') }}</span></div><n-input-number v-model:value="settings.price_create_original" :min="0" :max="1000000" /></div>
+            <div class="setting-row"><div><strong>{{ t('priceCreateResample') }}</strong><span>{{ t('priceUnit') }}</span></div><n-input-number v-model:value="settings.price_create_resample" :min="0" :max="1000000" /></div>
+            <div class="setting-row"><div><strong>{{ t('priceDownloadOriginal') }}</strong><span>{{ t('priceUnit') }}</span></div><n-input-number v-model:value="settings.price_download_original" :min="0" :max="1000000" /></div>
+            <div class="setting-row"><div><strong>{{ t('priceDownloadResample') }}</strong><span>{{ t('priceUnit') }}</span></div><n-input-number v-model:value="settings.price_download_resample" :min="0" :max="1000000" /></div>
+          </div>
+          <div class="settings-actions"><n-button type="primary" :loading="saving" @click="saveSettings"><template #icon><save :size="16" /></template>{{ t('saveSettings') }}</n-button></div>
         </section>
       </template>
     </main>
+
   </div>
+
+  <!-- 登录模态框挂模板根级：门禁页与应用主页的右上角图标共用 -->
+  <n-modal v-model:show="showLoginModal">
+    <div class="login-panel">
+      <div class="brand-lockup"><span class="brand-mark"><log-in :size="15" /></span><span>{{ t('adminLogin') }}</span></div>
+      <form class="login-form" @submit.prevent="login">
+        <label>{{ t('username') }}<n-input v-model:value="username" autocomplete="username" /></label>
+        <label>{{ t('password') }}<n-input v-model:value="password" type="password" show-password-on="click" autocomplete="current-password" /></label>
+        <n-alert v-if="error" type="error" :show-icon="false">{{ error }}</n-alert>
+        <n-button type="primary" attr-type="submit" :loading="loginLoading" block><template #icon><log-in :size="16" /></template>{{ t('login') }}</n-button>
+      </form>
+    </div>
+  </n-modal>
 </template>

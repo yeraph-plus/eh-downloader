@@ -1,13 +1,23 @@
-export type Role = 'admin' | 'guest' | 'none'
+export type AccessMode = 'admin' | 'guest' | 'core'
 export type ArchiveType = 'original' | 'resample'
 export type GuestDownloadMode = 'disabled' | ArchiveType
 
+export interface SessionPrices {
+  create_original: number
+  create_resample: number
+  download_original: number
+  download_resample: number
+}
+
 export interface SessionState {
-  authenticated: boolean
-  role: Role
-  csrf_token: string | null
-  guest_cache_access: boolean
+  admin: boolean
+  mode: AccessMode
   guest_download_mode: GuestDownloadMode
+  site_identity: boolean
+  core_configured: boolean
+  core_login_url: string | null
+  prices: SessionPrices
+  csrf_token: string | null
 }
 
 export interface Task {
@@ -49,7 +59,9 @@ export interface Account {
 }
 
 export interface Settings {
-  guest_cache_access: boolean
+  access_mode: AccessMode
+  core_site_url: string
+  core_base_url: string
   guest_download_mode: GuestDownloadMode
   cache_enabled: boolean
   retention_days: number
@@ -57,4 +69,8 @@ export interface Settings {
   max_archive_size_mb: number
   worker_concurrency: number
   api_token_configured: boolean
+  price_create_original: number
+  price_create_resample: number
+  price_download_original: number
+  price_download_resample: number
 }

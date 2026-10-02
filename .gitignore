@@ -15,3 +15,6 @@ cache/
 backend/test-output/
 backend/.test-tmp/
 backend/pytest-cache-files-*/
+backend/build/
+backend/*.egg-info/
+docker-compose.override.yml

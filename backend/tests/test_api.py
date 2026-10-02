@@ -142,16 +142,14 @@ def test_public_guest_download_modes_share_one_identity(test_settings):
     with TestClient(app) as admin:
         headers = login(admin)
         current = admin.get("/api/v1/settings").json()
-        current["guest_cache_access"] = True
+        current["access_mode"] = "guest"
         current["guest_download_mode"] = "resample"
         assert admin.put("/api/v1/settings", json=current, headers=headers).status_code == 200
 
     with TestClient(app) as guest_one:
         state = guest_one.get("/api/v1/auth/session").json()
-        assert state["role"] == "none"
-        assert state["authenticated"] is False
-        assert state["guest_cache_access"] is True
-        assert state["csrf_token"] is None
+        assert state["admin"] is False
+        assert state["mode"] == "guest"
         forbidden = guest_one.post(
             "/api/v1/tasks",
             json={"gallery_urls": "https://e-hentai.org/g/22222/abcdef0123/", "archive_type": "original"},
@@ -211,9 +209,9 @@ def test_guest_archive_access_supports_local_cache_and_remote_relay(test_setting
             task.status = TaskStatus.COMPLETED.value
             session.commit()
         current = admin.get("/api/v1/settings").json()
-        current["guest_cache_access"] = True
+        current["access_mode"] = "guest"
         saved = admin.put("/api/v1/settings", json=current, headers=headers)
-        assert saved.json()["guest_cache_access"] is True
+        assert saved.json()["access_mode"] == "guest"
 
     with TestClient(app) as guest:
         assert guest.get("/api/v1/tasks").json()[0]["id"] == task_id
@@ -224,7 +222,7 @@ def test_guest_archive_access_supports_local_cache_and_remote_relay(test_setting
         current = admin.get("/api/v1/settings").json()
         current["cache_enabled"] = False
         saved = admin.put("/api/v1/settings", json=current, headers=headers)
-        assert saved.json()["guest_cache_access"] is True
+        assert saved.json()["access_mode"] == "guest"
 
         remote_task_id = create_task(admin, headers, 33555)["id"]
         with app.state.database.session_factory() as session:
@@ -252,28 +250,29 @@ def test_guest_archive_access_supports_local_cache_and_remote_relay(test_setting
             session.commit()
     with TestClient(app) as guest:
         state = guest.get("/api/v1/auth/session").json()
-        assert state["role"] == "none"
-        assert state["authenticated"] is False
-        assert state["guest_cache_access"] is True
+        assert state["admin"] is False
+        assert state["mode"] == "guest"
         assert {task["id"] for task in guest.get("/api/v1/tasks").json()} == {task_id, remote_task_id}
         response = guest.get(f"/api/v1/tasks/{remote_task_id}/download")
         assert response.status_code == 200
         assert response.content == b"PK-relayed"
 
 
-def test_guest_creation_is_disabled_when_archive_access_is_off(test_settings):
+def test_admin_mode_keeps_the_type_lock_as_configured(test_settings):
     app = create_app(test_settings)
     with TestClient(app) as admin:
         headers = login(admin)
         current = admin.get("/api/v1/settings").json()
-        current["guest_cache_access"] = False
+        current["access_mode"] = "admin"
         current["guest_download_mode"] = "original"
         saved = admin.put("/api/v1/settings", json=current, headers=headers)
         assert saved.status_code == 200
-        assert saved.json()["guest_download_mode"] == "disabled"
+        # The type lock is stored as configured; the access mode alone
+        # decides whether the public desk is open at all.
+        assert saved.json()["guest_download_mode"] == "original"
 
     with TestClient(app) as guest:
-        assert guest.get("/api/v1/auth/session").json()["role"] == "none"
+        assert guest.get("/api/v1/auth/session").json()["admin"] is False
         response = guest.post(
             "/api/v1/tasks",
             json={"gallery_urls": "https://e-hentai.org/g/33666/abcdef0123/", "archive_type": "original"},
@@ -310,11 +309,19 @@ def test_guest_access_is_off_by_default(test_settings):
     app = create_app(test_settings)
     with TestClient(app) as client:
         assert client.get("/api/v1/auth/session").json() == {
-            "authenticated": False,
-            "role": "none",
-            "csrf_token": None,
-            "guest_cache_access": False,
+            "admin": False,
+            "mode": "admin",
             "guest_download_mode": "disabled",
+            "site_identity": False,
+            "core_configured": False,
+            "core_login_url": None,
+            "prices": {
+                "create_original": 5,
+                "create_resample": 0,
+                "download_original": 1,
+                "download_resample": 0,
+            },
+            "csrf_token": None,
         }
         assert client.get("/api/v1/tasks").status_code == 401
 

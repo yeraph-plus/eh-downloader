@@ -8,7 +8,11 @@ button, input, textarea { font: inherit; }
 .loading-screen, .login-shell { min-height: 100vh; display: grid; place-items: center; }
 .loading-screen { color: #66706a; font-weight: 650; }
 .login-shell { background: #eef1f0; padding: 24px; position: relative; }
-.login-language { position: absolute; top: 18px; right: 20px; }
+.login-topbar { position: absolute; top: 18px; right: 20px; display: flex; align-items: center; gap: 6px; }
+.login-topbar .login-language { position: static; }
+.gate-hint { display: flex; align-items: center; justify-content: center; gap: 6px; margin: 26px 0 6px; color: #4e5651; font-size: 14px; }
+.login-panel .login-form { margin-top: 20px; }
+.login-panel .n-button + .n-button { margin-top: 10px; }
 .login-panel { width: min(390px, 100%); background: white; border: 1px solid #dfe3e1; border-radius: 6px; padding: 28px; box-shadow: 0 10px 30px rgba(31, 39, 35, .06); }
 .login-panel h1 { margin: 36px 0 18px; font-size: 20px; letter-spacing: 0; }
 .login-form { display: grid; gap: 16px; }
@@ -20,9 +24,13 @@ button, input, textarea { font: inherit; }
 .topbar nav { display: flex; align-self: stretch; gap: 2px; }
 .topbar nav button { border: 0; background: transparent; color: #616862; padding: 0 16px; display: flex; align-items: center; gap: 7px; cursor: pointer; border-bottom: 2px solid transparent; }
 .topbar nav button.active { color: #1f5e47; border-bottom-color: #247052; font-weight: 650; }
-.guest-label { color: #7b6650; font-size: 13px; }
 .top-actions { display: flex; align-items: center; justify-content: flex-end; gap: 4px; }
 .content { width: min(1440px, 100%); margin: 0 auto; padding: 24px; display: grid; gap: 18px; }
+.price-banner { margin-bottom: 18px; background: white; border: 1px solid #dfe3e1; border-radius: 6px; padding: 18px 20px; }
+.price-banner .price-title { color: #1f392e; }
+.price-banner .price-title { font-weight: 600; margin-bottom: 8px; }
+.price-banner .price-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.price-banner .price-list li { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .submit-band { display: flex; flex-direction: column; align-items: stretch; gap: 12px; padding: 18px 0 22px; border-bottom: 1px solid #dfe3e1; }
 .submit-controls { width: 100%; display: flex; flex-direction: row; align-items: center; justify-content: flex-end; gap: 12px; }
 .submit-controls .n-radio-group { display: flex; flex: 0 0 auto; }
@@ -40,7 +48,6 @@ button, input, textarea { font: inherit; }
 .gallery-url:hover { color: #247052; text-decoration: underline; }
 .row-meta { font-size: 11px; }
 .status-cell { display: grid; gap: 7px; }
-.icon-actions { display: flex; justify-content: flex-end; }
 .account-import { display: grid; grid-template-columns: minmax(160px, 260px) minmax(220px, 1fr) 120px; gap: 10px; padding: 16px 16px 0; }
 .file-picker { height: 34px; border: 1px dashed #b8c0bb; border-radius: 3px; background: #fafbfa; display: flex; align-items: center; gap: 8px; padding: 0 12px; color: #59625d; cursor: pointer; overflow: hidden; }
 .file-picker span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -72,3 +79,8 @@ button, input, textarea { font: inherit; }
   .setting-row > .n-input-number { width: 100%; }
   .top-actions .n-button { padding-left: 7px; padding-right: 7px; }
 }
+
+/* 门禁与登录模态框排版（集成轮新增） */
+.login-panel .brand-lockup { margin-bottom: 10px; }
+.login-panel .gate-hint + .n-button,
+.login-panel .n-button:only-of-type { margin-top: 18px; }

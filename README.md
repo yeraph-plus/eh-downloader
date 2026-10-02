@@ -77,6 +77,9 @@ Only the following variables need to be set in `.env`. All other settings have s
 | `WEB_PORT` | No | Published web port (default `8000`) |
 | `SECURE_COOKIES` | No | Set to `true` when serving over HTTPS |
 | `EH_PROXY_URL` | No | HTTP/SOCKS proxy used for EH requests |
+| `AIYA_CORE_BASE_URL` | No | Site integration: AIYA Core site origin (no `/wp-json` suffix) |
+| `AIYA_CORE_SERVICE_KEY` | No | Site integration: service key (generated at the top of the site's file-serve settings page) |
+| `AIYA_CORE_SESSION_COOKIE` | No | Site integration: the site session cookie name (default `aiya_session`) |
 
 The administrator username defaults to `admin`. Cache settings, guest permissions, archive size limits, and Worker concurrency can all be adjusted from the Settings page after startup.
 
@@ -119,12 +122,15 @@ Tasks are processed automatically by the background Worker. When an archive is r
 - Cache disabled: only the official archive URL is prepared. Downloads are relayed through the local service without retaining the ZIP locally.
 - Expired or missing files: their download links become unavailable, and invalid records are handled by the cleanup process.
 
-### Guest Access
+### Access modes (admin / guest / core)
 
-Guest access is disabled by default. Guests share one public identity. Available permissions are:
+The settings page's "Access mode" switch decides the shape of the public desk:
 
-- Allow guests to view the archive list.
-- Prevent or allow guests to create Resample or Original tasks.
+- **Admin only (`admin`, default)**: the public desk is closed.
+- **Open guest desk (`guest`)**: the classic anonymous behavior — everyone can view the list, create within the type lock and download ready archives, free of charge.
+- **Site integrated (`core`)**: the exact same guest behavior with the site session cookie layered on as external authentication and credit billing. A visitor carrying the site's session cookie (same-hostname deployment) is recognized as a site user automatically; creating tasks and downloading archives are charged through the site's credit ledger at the configured prices (repeated clicks inside a 30-second window count once). Anonymous visitors can browse but cannot act; banned site identities are answered like anonymous ones; an unreachable site refuses charged actions (503) while browsing survives. Without `AIYA_CORE_BASE_URL` / `AIYA_CORE_SERVICE_KEY` configured, core mode runs as guest.
+
+All non-admin modes share one task list and the guest type lock. Recommended deployment: keep the service off the public internet and mount it under a same-hostname reverse-proxy path of the site (e.g. `/apps/eh-downloader/`) — that is what lets the site session cookie reach this service. The visitor hint's redirect link is configured on the settings page ("Site URL", no env fallback).
 
 ## HTTPS and Security
 
