@@ -4,7 +4,8 @@ from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 
 from app.main import create_app
-from app.models import Account, Archive, CacheEntry, DownloadTask, TaskStatus, utcnow
+from app.models import Account, AppSetting, Archive, CacheEntry, DownloadTask, TaskStatus, utcnow
+from app.settings_store import SettingsStore
 
 
 def login(client: TestClient) -> dict[str, str]:
@@ -21,6 +22,80 @@ def create_task(client: TestClient, headers: dict[str, str], gid: int, archive_t
     )
     assert response.status_code == 202
     return response.json()[0]
+
+
+def test_settings_roundtrips_proxy_and_retry_cap(test_settings):
+    app = create_app(test_settings)
+    with TestClient(app) as client:
+        headers = login(client)
+        current = client.get("/api/v1/settings").json()
+        assert current["eh_proxy_url"] == ""
+        assert current["task_max_retries"] == 3
+
+        current["eh_proxy_url"] = "socks5://127.0.0.1:1080"
+        current["task_max_retries"] = 5
+        saved = client.put("/api/v1/settings", json=current, headers=headers)
+        assert saved.json()["eh_proxy_url"] == "socks5://127.0.0.1:1080"
+        assert saved.json()["task_max_retries"] == 5
+
+        # A non-proxy scheme is dropped to empty (direct connection).
+        current["eh_proxy_url"] = "ftp://example.com:21"
+        saved = client.put("/api/v1/settings", json=current, headers=headers)
+        assert saved.json()["eh_proxy_url"] == ""
+
+        rejected = client.put("/api/v1/settings", json={**current, "task_max_retries": 6}, headers=headers)
+        assert rejected.status_code == 422
+
+
+def test_stats_endpoint_gates_and_aggregates(test_settings):
+    app = create_app(test_settings)
+    with TestClient(app) as client:
+        # admin mode is the default: the public stats surface is closed.
+        assert client.get("/api/v1/stats").status_code == 401
+        headers = login(client)
+        stats = client.get("/api/v1/stats", headers=headers).json()
+        assert stats["worker_alive"] is False
+        assert stats["worker_last_beat_at"] is None
+        assert stats["downloads"]["served_total"] == 0
+        assert stats["credits"]["total_spent"] == 0
+
+        with app.state.database.session_factory() as session:
+            session.add(Account(name="pool-a", encrypted_cookie="x", cookie_fingerprint="fa", gp=1200, credits=30, enabled=True))
+            session.add(Account(name="pool-b", encrypted_cookie="y", cookie_fingerprint="fb", enabled=False))
+            session.add(CacheEntry(sha1="c" * 40, zip_path="ready.zip", filename="ready.zip", filesize=500, expire_at=utcnow() + timedelta(days=1)))
+            session.commit()
+
+        stats = client.get("/api/v1/stats", headers=headers).json()
+        assert stats["eh_pool"]["gp"] == 1200
+        assert stats["eh_pool"]["credits"] == 30
+        assert stats["eh_pool"]["accounts_ready"] == 1
+        assert stats["eh_pool"]["accounts_total"] == 2
+        assert stats["downloads"]["archives_ready"] == 1
+        assert stats["traffic"]["cache_stored_bytes"] == 500
+
+        # Guest mode keeps the stats desk public like the task list.
+        with app.state.database.session_factory() as session:
+            session.add(AppSetting(key="access_mode", value="guest"))
+            session.commit()
+        assert client.get("/api/v1/stats").status_code == 200
+
+
+def test_counter_bump_survives_garbage_and_is_atomic(test_settings):
+    app = create_app(test_settings)
+    store = SettingsStore(test_settings)
+    with TestClient(app):
+        with app.state.database.session_factory() as session:
+            session.add(AppSetting(key="stats_credit_spent", value="not-a-number"))
+            session.commit()
+            store.bump_counter(session, "stats_credit_spent", 5)
+            session.commit()
+            store.bump_counter(session, "stats_credit_spent", 7)
+            session.commit()
+            assert store.get_counter(session, "stats_credit_spent") == 12
+            # Last-writer-wins upsert for the heartbeat-style keys.
+            store.upsert_value(session, "stats_worker_beat", "1700000000")
+            session.commit()
+            assert store.get_counter(session, "stats_worker_beat") == 1700000000
 
 
 def test_batch_task_creation_is_atomic(test_settings):

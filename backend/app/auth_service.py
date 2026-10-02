@@ -10,6 +10,7 @@ from .config import Settings
 from .eh_client import EHClient, EHClientError
 from .models import Account, utcnow
 from .security import SecurityManager
+from .settings_store import SettingsStore
 
 
 COOKIE_DOMAIN_RE = re.compile(r"(^|\.)e-hentai\.org$|(^|\.)exhentai\.org$", re.IGNORECASE)
@@ -51,9 +52,10 @@ def parse_netscape_cookies(value: str) -> ParsedCookies:
 
 
 class AuthService:
-    def __init__(self, settings: Settings, security: SecurityManager):
+    def __init__(self, settings: Settings, security: SecurityManager, store: SettingsStore):
         self.settings = settings
         self.security = security
+        self.store = store
 
     def get_cookie(self, account: Account) -> str:
         return self.security.decrypt(account.encrypted_cookie)
@@ -84,7 +86,7 @@ class AuthService:
         )
 
     def validate_account(self, session: Session, account: Account) -> None:
-        client = EHClient(self.get_cookie(account), self.settings)
+        client = EHClient(self.get_cookie(account), self.settings, proxy=self.store.get_eh_proxy_url(session) or None)
         try:
             client.validate_login()
         except EHClientError as exc:

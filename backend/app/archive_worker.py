@@ -24,7 +24,14 @@ from .settings_store import SettingsStore
 from .task_service import TaskService
 
 
-RETRY_DELAYS = (30, 120, 600)
+# Backoff per retry attempt, indexed by retry_count; the first three
+# values are the historical schedule, the rest serve retries 4–5 enabled
+# by the settings page's per-task cap (0–5, default 3).
+RETRY_DELAYS = (30, 120, 600, 1800, 3600)
+
+# The worker is a separate process with no health surface; the stats page
+# infers liveness from this throttled heartbeat in the settings table.
+HEARTBEAT_EVERY_SECONDS = 15
 
 
 def safe_filename(value: str, limit: int = 180) -> str:
@@ -49,13 +56,24 @@ class ArchiveWorker:
         self.cache = cache
         self.tasks = tasks
         self._capacity_lock = threading.Lock()
+        self._last_beat = 0.0
 
     def run_forever(self) -> None:
         self.database.create_all()
         self.cache.root()
         while True:
+            self._beat()
             self.run_once()
             time.sleep(self.settings.worker_poll_seconds)
+
+    def _beat(self) -> None:
+        now = time.monotonic()
+        if now - self._last_beat < HEARTBEAT_EVERY_SECONDS:
+            return
+        self._last_beat = now
+        with self.database.session_factory() as session:
+            self.store.upsert_value(session, SettingsStore.STATS_WORKER_BEAT_KEY, str(int(utcnow().timestamp())))
+            session.commit()
 
     def run_once(self) -> None:
         self.cache.root()
@@ -188,7 +206,10 @@ class ArchiveWorker:
         found_requested_form = False
         for detached in accounts:
             try:
-                client = EHClient(self.auth.get_cookie(detached), self.settings)
+                client = EHClient(
+                    self.auth.get_cookie(detached), self.settings,
+                    proxy=self.store.get_eh_proxy_url(session) or None,
+                )
                 archiver_url, page = client.get_archive_page(gallery)
                 loaded_pages += 1
                 self._record_account_page(detached.id, page.gp, page.credits)
@@ -240,17 +261,19 @@ class ArchiveWorker:
                 db_account.credits = page.credits
                 db_account.last_check = utcnow()
                 db_account.last_used_at = utcnow()
-                if form.estimated_size is None:
-                    raise EHClientError(
-                        "EH did not report an estimated archive size; the configured size limit cannot be enforced"
-                    )
                 max_archive_size_mb = self.store.get_max_archive_size_mb(session)
-                max_archive_size = max_archive_size_mb * 1024**2
-                if form.estimated_size > max_archive_size:
-                    estimated_mb = form.estimated_size / 1024**2
-                    raise EHClientError(
-                        f"Estimated archive size {estimated_mb:.1f} MB exceeds the {max_archive_size_mb} MB limit"
-                    )
+                if max_archive_size_mb > 0:
+                    # 0 之外的限值才需要估算大小配合检查；无限制时缺失估算不影响。
+                    if form.estimated_size is None:
+                        raise EHClientError(
+                            "EH did not report an estimated archive size; the configured size limit cannot be enforced"
+                        )
+                    max_archive_size = max_archive_size_mb * 1024**2
+                    if form.estimated_size > max_archive_size:
+                        estimated_mb = form.estimated_size / 1024**2
+                        raise EHClientError(
+                            f"Estimated archive size {estimated_mb:.1f} MB exceeds the {max_archive_size_mb} MB limit"
+                        )
                 required = form.estimated_size
                 cache_enabled = self.store.get_cache_enabled(session)
                 if cache_enabled and required:
@@ -295,7 +318,10 @@ class ArchiveWorker:
             task = session.get(DownloadTask, task_id)
             archive = task.archive
             account = archive.account
-            client = EHClient(self.auth.get_cookie(account), self.settings)
+            client = EHClient(
+                self.auth.get_cookie(account), self.settings,
+                proxy=self.store.get_eh_proxy_url(session) or None,
+            )
             archiver_url = archive.archiver_url
         page = client.load_archive_page(archiver_url)
         if page.state in {"quote", "confirmation"}:
@@ -352,8 +378,12 @@ class ArchiveWorker:
             archive = task.archive
             if not archive.remote_download_url:
                 raise EHClientError("Archive download URL is missing")
-            client = EHClient(self.auth.get_cookie(archive.account), self.settings)
-            max_bytes = self.store.get_max_archive_size_mb(session) * 1024**2
+            client = EHClient(
+                self.auth.get_cookie(archive.account), self.settings,
+                proxy=self.store.get_eh_proxy_url(session) or None,
+            )
+            max_mb = self.store.get_max_archive_size_mb(session)
+            max_bytes = max_mb * 1024**2 if max_mb > 0 else None
             task.status = archive.status = TaskStatus.DOWNLOADING.value
             task.error = None
             session.commit()
@@ -384,6 +414,7 @@ class ArchiveWorker:
         if not partial.is_file():
             raise EHClientError("Temporary archive file is missing", retryable=True)
         sha1 = self.cache.verify_zip(partial)
+        downloaded = partial.stat().st_size
         with self.database.session_factory() as session:
             task = session.get(DownloadTask, task_id)
             archive = task.archive
@@ -395,6 +426,8 @@ class ArchiveWorker:
             task.status = TaskStatus.CACHED.value
             task.progress = 100
             task.error = None
+            # Stats埋点：一次成功从 EH 拉取的归档流量（重试只计最终成功那次）。
+            self.store.bump_counter(session, SettingsStore.STATS_BYTES_DOWNLOADED_KEY, downloaded)
             session.commit()
 
     def _handle_error(self, task_id: str, exc: Exception, *, retryable: bool) -> None:
@@ -413,8 +446,10 @@ class ArchiveWorker:
                     elif exc.retryable:
                         account.cooldown_reason = str(exc)
                         account.cooldown_until = utcnow() + timedelta(seconds=self.settings.account_cooldown_seconds)
-            if retryable and task.retry_count < 3:
-                task.next_attempt_at = utcnow() + timedelta(seconds=RETRY_DELAYS[task.retry_count])
+            if retryable and task.retry_count < self.store.get_task_max_retries(session):
+                task.next_attempt_at = utcnow() + timedelta(
+                    seconds=RETRY_DELAYS[min(task.retry_count, len(RETRY_DELAYS) - 1)]
+                )
                 task.retry_count += 1
             else:
                 task.status = TaskStatus.FAILED.value

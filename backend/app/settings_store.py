@@ -1,3 +1,5 @@
+from sqlalchemy import Integer, func
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
 from .config import Settings
@@ -18,6 +20,12 @@ class SettingsStore:
     PRICE_CREATE_RESAMPLE_KEY = "price_create_resample"
     PRICE_DOWNLOAD_ORIGINAL_KEY = "price_download_original"
     PRICE_DOWNLOAD_RESAMPLE_KEY = "price_download_resample"
+    EH_PROXY_URL_KEY = "eh_proxy_url"
+    TASK_MAX_RETRIES_KEY = "task_max_retries"
+    STATS_CREDIT_SPENT_KEY = "stats_credit_spent"
+    STATS_DOWNLOADS_SERVED_KEY = "stats_downloads_served"
+    STATS_BYTES_DOWNLOADED_KEY = "stats_bytes_downloaded"
+    STATS_WORKER_BEAT_KEY = "stats_worker_beat"
 
     # 站点积分默认定价：原始归档创建 5 / 下载 1，重采样归档创建 0（免费）/
     # 下载 0。设置页未保存过的键按此默认计费。
@@ -27,6 +35,9 @@ class SettingsStore:
         PRICE_DOWNLOAD_ORIGINAL_KEY: 1,
         PRICE_DOWNLOAD_RESAMPLE_KEY: 0,
     }
+
+    # 每任务可重试次数上限的默认值（可重试的网络类错误），0 = 不重试。
+    DEFAULT_TASK_MAX_RETRIES = 3
 
     def __init__(self, defaults: Settings):
         self.defaults = defaults
@@ -46,6 +57,10 @@ class SettingsStore:
 
     def get_access_mode(self, session: Session) -> str:
         value = self._get(session, self.ACCESS_MODE_KEY)
+        if value == "core" and not self.defaults.aiya_core_enabled:
+            # Integration master switch off: a stored core mode reads back
+            # as guest so no surface ever advertises the hidden mode.
+            return "guest"
         return value if value in {"admin", "guest", "core"} else "admin"
 
     def get_core_site_url(self, session: Session) -> str:
@@ -85,14 +100,36 @@ class SettingsStore:
         except ValueError:
             return 0
 
+    def get_eh_proxy_url(self, session: Session) -> str:
+        """EH requests' HTTP/SOCKS proxy (设置页「EH 代理」); empty means
+        direct connection. Only the save path validates the scheme, this
+        reader stays lenient so a bad value can never crash a worker."""
+        return (self._get(session, self.EH_PROXY_URL_KEY) or "").strip()
+
+    def get_task_max_retries(self, session: Session) -> int:
+        """How many times one task may retry a retryable error; unset keys
+        answer the historical default of 3, garbage clamps into 0–5."""
+        try:
+            raw = self._get(session, self.TASK_MAX_RETRIES_KEY)
+            return max(0, min(5, int(raw))) if raw is not None else self.DEFAULT_TASK_MAX_RETRIES
+        except ValueError:
+            return self.DEFAULT_TASK_MAX_RETRIES
+
     def update_public_settings(
         self, session: Session, *, access_mode: str, core_site_url: str, guest_download_mode: str,
         cache_enabled: bool, retention_days: int, cache_limit_bytes: int,
         max_archive_size_mb: int, worker_concurrency: int,
         price_create_original: int, price_create_resample: int,
         price_download_original: int, price_download_resample: int,
+        eh_proxy_url: str, task_max_retries: int,
     ) -> None:
-        self._set(session, self.ACCESS_MODE_KEY, access_mode if access_mode in {"admin", "guest", "core"} else "admin")
+        # core is only storable while the integration master switch is on;
+        # with the switch off a submitted core falls back to guest (same
+        # read-side coercion as get_access_mode), other junk to admin.
+        if access_mode == "core" and not self.defaults.aiya_core_enabled:
+            access_mode = "guest"
+        allowed_modes = {"admin", "guest", "core"} if self.defaults.aiya_core_enabled else {"admin", "guest"}
+        self._set(session, self.ACCESS_MODE_KEY, access_mode if access_mode in allowed_modes else "admin")
         # Only http(s) URLs are stored: the value is rendered straight into
         # the visitor hint's href, so anything else is dropped to empty.
         site_url = core_site_url.strip()[:255]
@@ -109,6 +146,40 @@ class SettingsStore:
         self._set(session, self.PRICE_CREATE_RESAMPLE_KEY, str(max(0, price_create_resample)))
         self._set(session, self.PRICE_DOWNLOAD_ORIGINAL_KEY, str(max(0, price_download_original)))
         self._set(session, self.PRICE_DOWNLOAD_RESAMPLE_KEY, str(max(0, price_download_resample)))
+        # EH 代理只接受 http(s)/socks5 scheme；其他值一律丢弃为直连，
+        # 与 core_site_url 同一套「存前归一」风格。
+        proxy = eh_proxy_url.strip()[:255]
+        if not proxy.startswith(("http://", "https://", "socks5://", "socks5h://")):
+            proxy = ""
+        self._set(session, self.EH_PROXY_URL_KEY, proxy)
+        self._set(session, self.TASK_MAX_RETRIES_KEY, str(max(0, min(5, task_max_retries))))
 
     def set_api_token_hash(self, session: Session, token_hash: str) -> None:
         self._set(session, self.TOKEN_HASH_KEY, token_hash)
+
+    def upsert_value(self, session: Session, key: str, value: str) -> None:
+        """Insert-or-overwrite without the read-modify-write window of
+        `_set` (missing-key inserts from two processes can race on the PK);
+        used for last-writer-wins values like the worker heartbeat."""
+        statement = sqlite_insert(AppSetting).values(key=key, value=value)
+        statement = statement.on_conflict_do_update(index_elements=[AppSetting.key], set_={"value": value})
+        session.execute(statement)
+
+    def bump_counter(self, session: Session, key: str, amount: int) -> None:
+        """Atomic counter increment for the public stats page. Deliberately
+        NOT `_get`+`_set`: the web and worker processes (and concurrent
+        requests) would read-modify-write over each other; a SQLite-level
+        upsert cannot lose an update. Garbage values cast to 0 by the DB."""
+        statement = sqlite_insert(AppSetting).values(key=key, value=str(amount))
+        statement = statement.on_conflict_do_update(
+            index_elements=[AppSetting.key],
+            set_={"value": func.cast(AppSetting.value, Integer) + amount},
+        )
+        session.execute(statement)
+
+    def get_counter(self, session: Session, key: str) -> int:
+        try:
+            raw = self._get(session, key)
+            return max(0, int(raw)) if raw is not None else 0
+        except ValueError:
+            return 0

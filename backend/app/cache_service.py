@@ -32,7 +32,12 @@ class CacheService:
         return sum(path.stat().st_size for path in self.root().iterdir() if path.is_file())
 
     def available_bytes(self, session: Session) -> int:
-        return max(0, self.store.get_cache_limit_bytes(session) - self.used_bytes())
+        """Free space under the configured cache limit; a limit of 0 means
+        unlimited and answers a sentinel no reservation can exhaust."""
+        limit = self.store.get_cache_limit_bytes(session)
+        if limit <= 0:
+            return 2**62
+        return max(0, limit - self.used_bytes())
 
     @staticmethod
     def verify_zip(path: Path, expected_size: int | None = None) -> str:

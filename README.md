@@ -76,18 +76,14 @@ Only the following variables need to be set in `.env`. All other settings have s
 | `WEB_BIND_ADDRESS` | No | Web bind address (default `127.0.0.1`) |
 | `WEB_PORT` | No | Published web port (default `8000`) |
 | `SECURE_COOKIES` | No | Set to `true` when serving over HTTPS |
-| `EH_PROXY_URL` | No | HTTP/SOCKS proxy used for EH requests |
+| `AIYA_CORE_ENABLED` | No | Site-integration master switch (default `false`): when off, the core access mode and credit billing hide entirely, leaving only guest/admin; when `true`, requires the two settings below |
 | `AIYA_CORE_BASE_URL` | No | Site integration: AIYA Core site origin (no `/wp-json` suffix) |
 | `AIYA_CORE_SERVICE_KEY` | No | Site integration: service key (generated at the top of the site's file-serve settings page) |
 | `AIYA_CORE_SESSION_COOKIE` | No | Site integration: the site session cookie name (default `aiya_session`) |
 
-The administrator username defaults to `admin`. Cache settings, guest permissions, archive size limits, and Worker concurrency can all be adjusted from the Settings page after startup.
+The administrator username defaults to `admin`. Cache settings, guest permissions, archive size limits, Worker concurrency, the per-task retry cap, and the EH proxy can all be adjusted from the Settings page after startup; changes require no restart — the Worker picks them up on its next round of work.
 
-Tip: When Docker uses a proxy running on the host, do not use `127.0.0.1` from inside the container. For example, if the host proxy listens on port `7890`:
-
-```dotenv
-EH_PROXY_URL=http://host.docker.internal:7890
-```
+Tip: When Docker uses a proxy running on the host, do not use `127.0.0.1` from inside the container. For example, if the host proxy listens on port `7890`, set the EH proxy to `http://host.docker.internal:7890` in the Settings page. If you are upgrading from a release that used the `EH_PROXY_URL` environment variable, re-enter the proxy in the Settings page once after upgrading.
 
 ## Usage
 

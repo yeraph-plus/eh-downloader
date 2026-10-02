@@ -75,18 +75,14 @@ docker compose ps
 | `WEB_BIND_ADDRESS` | 否 | Web 监听地址（默认 `127.0.0.1`） |
 | `WEB_PORT` | 否 | Web 映射端口（默认 `8000`） |
 | `SECURE_COOKIES` | 否 | HTTPS 部署后应设为 `true` |
-| `EH_PROXY_URL` | 否 | EH 请求使用的 HTTP/SOCKS 代理地址 |
+| `AIYA_CORE_ENABLED` | 否 | 站点集成总开关（默认 `false`）：关闭时隐藏线上集成模式与计费，仅保留游客/管理员模式；为 `true` 且配置了下两项才启用 |
 | `AIYA_CORE_BASE_URL` | 否 | 站点集成：AIYA Core 站点源地址（不带 `/wp-json`） |
 | `AIYA_CORE_SERVICE_KEY` | 否 | 站点集成：服务密钥（站点后台「文件下载」页顶部生成） |
 | `AIYA_CORE_SESSION_COOKIE` | 否 | 站点集成：站点会话 cookie 名（默认 `aiya_session`） |
 
-管理员用户名默认为 `admin`。缓存、游客权限、下载大小限制和 Worker 并发均可在启动后的设置页调整。缓存、游客权限、下载大小限制和 Worker 并发均可在启动后的设置页调整。
+管理员用户名默认为 `admin`。缓存、游客权限、下载大小限制、Worker 并发、任务最大重试次数和 EH 代理均可在启动后的设置页调整，改动无需重启，由 Worker 在下一轮工作时采用。
 
-Tips：Docker 使用宿主机代理时，不能在容器内填写 `127.0.0.1`。例如宿主机代理端口为 `7890`：
-
-```dotenv
-EH_PROXY_URL=http://host.docker.internal:7890
-```
+Tips：Docker 使用宿主机代理时，不能在设置页填写 `127.0.0.1`。例如宿主机代理端口为 `7890`，EH 代理应填 `http://host.docker.internal:7890`。若从旧版本升级且原先使用过 `EH_PROXY_URL` 环境变量，请在升级后到设置页重新填写一次代理地址。
 
 ## 使用说明
 

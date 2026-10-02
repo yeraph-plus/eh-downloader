@@ -205,9 +205,12 @@ def validate_remote_url(url: str) -> None:
 
 
 class EHClient:
-    def __init__(self, cookie: str, settings: Settings):
+    def __init__(self, cookie: str, settings: Settings, *, proxy: str | None = None):
         self.cookie = cookie
         self.settings = settings
+        # Proxy lives in the SQL settings (设置页「EH 代理」), fetched per
+        # construction by the caller; empty string means direct connection.
+        self.proxy = proxy or None
         self.base_headers = {
             "User-Agent": "EhDownloader/1.0",
             "Accept": "text/html,application/xhtml+xml,application/zip,*/*",
@@ -220,7 +223,7 @@ class EHClient:
             headers["Cookie"] = self.cookie
         return httpx.Client(
             headers=headers,
-            proxy=self.settings.eh_proxy_url,
+            proxy=self.proxy,
             timeout=httpx.Timeout(self.settings.eh_request_timeout_seconds),
             follow_redirects=False,
         )

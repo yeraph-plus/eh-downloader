@@ -65,8 +65,9 @@ class FakeCore:
 SITE_COOKIE = "7.ABCDEFGHIJKLMNOP"
 
 
-def build(test_settings, *, mode: str = "core", balance: int = 100, configured: bool = True):
+def build(test_settings, *, mode: str = "core", balance: int = 100, configured: bool = True, enabled: bool = True):
     settings = test_settings.model_copy(update={
+        "aiya_core_enabled": enabled,
         "aiya_core_base_url": "https://core.test" if configured else "",
         "aiya_core_service_key": "svc-key" if configured else "",
     })
@@ -437,6 +438,32 @@ def test_integration_disabled_degrades_core_to_guest(test_settings):
     assert client.effective_mode("core") == "guest"
     assert client.effective_mode("guest") == "guest"
     assert client.effective_mode("admin") == "admin"
+
+
+def test_master_switch_off_hides_integration_even_when_configured(test_settings):
+    app, fake, client = build(test_settings, mode="core", enabled=False)
+    with client:
+        session_state = client.get("/api/v1/auth/session").json()
+        assert session_state["mode"] == "guest"
+        assert session_state["core_configured"] is False
+        assert not fake.spends
+
+        # Anonymous guests keep the free desk: creation succeeds uncharged.
+        created = client.post(
+            "/api/v1/tasks",
+            json={"gallery_urls": "https://e-hentai.org/g/55501/abcdef0123/", "archive_type": "resample"},
+        )
+        assert created.status_code == 202
+        assert not fake.spends
+
+        # The settings surface hides the core mode entirely: the flag reads
+        # false and a submitted core access mode is refused back to guest.
+        headers = admin_headers(client)
+        settings_view = client.get("/api/v1/settings", headers=headers).json()
+        assert settings_view["core_enabled"] is False
+        assert settings_view["access_mode"] == "guest"
+        saved = client.put("/api/v1/settings", json={**settings_view, "access_mode": "core"}, headers=headers)
+        assert saved.json()["access_mode"] == "guest"
 
 
 def test_spend_surfaces_the_ledgers_balance_on_refusal(test_settings):

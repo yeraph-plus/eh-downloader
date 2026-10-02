@@ -6,7 +6,7 @@ from urllib.parse import quote
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response, status
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -23,7 +23,7 @@ from .config import Settings, get_settings
 from .database import Database
 from .delivery_service import DeliveryError, DeliveryService
 from .eh_client import EHClient, EHClientError, parse_gallery_url
-from .models import ACTIVE_TASK_STATUSES, Account, Archive, DownloadTask, RequesterType, TaskStatus, utcnow
+from .models import ACTIVE_TASK_STATUSES, Account, Archive, CacheEntry, DownloadTask, RequesterType, TaskStatus, utcnow
 from .schemas import (
     AccountCreateRequest,
     AccountResponse,
@@ -33,6 +33,12 @@ from .schemas import (
     SessionResponse,
     SettingsResponse,
     SettingsUpdateRequest,
+    StatsDownloads,
+    StatsEhPool,
+    StatsQueue,
+    StatsResponse,
+    StatsCredits,
+    StatsTraffic,
     TaskCreateRequest,
     TaskResponse,
     TokenRotateResponse,
@@ -55,7 +61,7 @@ def create_app(settings: Settings | None = None, core: AiyaCoreIntegration | Non
     database = Database(settings)
     security = SecurityManager(settings)
     store = SettingsStore(settings)
-    auth_service = AuthService(settings, security)
+    auth_service = AuthService(settings, security, store)
     task_service = TaskService(settings)
     cache_service = CacheService(settings, store)
     delivery_service = DeliveryService(settings, database, store, auth_service)
@@ -345,8 +351,74 @@ def create_app(settings: Settings | None = None, core: AiyaCoreIntegration | Non
         )
         entry.last_accessed_at = utcnow()
         task.download_count += 1
+        # Stats埋点：缓存命中也算一次交付（字节来自本地盘，不计 EH 流量）。
+        store.bump_counter(session, SettingsStore.STATS_DOWNLOADS_SERVED_KEY, 1)
         session.commit()
         return FileResponse(path, filename=entry.filename, media_type="application/zip", headers={"ETag": f'"{entry.sha1}"'})
+
+    @app.get("/api/v1/stats", response_model=StatsResponse)
+    def get_stats(
+        context: AccessContext = Depends(require_user),
+        session: Session = Depends(db_session),
+    ) -> StatsResponse:
+        """Aggregate desk stats for the public stats page: same gating as
+        the task list (admin-mode anonymous visitors get 401), aggregates
+        only — no account identities ever leave the server."""
+        now = utcnow()
+        beat = store.get_counter(session, SettingsStore.STATS_WORKER_BEAT_KEY)
+        worker_alive = beat > 0 and (now.timestamp() - beat) < 90
+
+        queued = session.scalar(
+            select(func.count()).select_from(DownloadTask).where(DownloadTask.status == TaskStatus.QUEUED.value)
+        )
+        active = session.scalar(
+            select(func.count()).select_from(DownloadTask).where(DownloadTask.status.in_(ACTIVE_TASK_STATUSES))
+        )
+        completed = session.scalar(
+            select(func.count()).select_from(DownloadTask).where(DownloadTask.status == TaskStatus.COMPLETED.value)
+        )
+        failed = session.scalar(
+            select(func.count()).select_from(DownloadTask).where(DownloadTask.status == TaskStatus.FAILED.value)
+        )
+        archives_ready = session.scalar(
+            select(func.count()).select_from(CacheEntry).where(CacheEntry.expire_at > now)
+        )
+        cache_stored = session.scalar(select(func.coalesce(func.sum(CacheEntry.filesize), 0)))
+
+        accounts_total = session.scalar(select(func.count()).select_from(Account))
+        accounts_ready = session.scalar(
+            select(func.count()).select_from(Account).where(
+                Account.enabled.is_(True),
+                or_(Account.cooldown_until.is_(None), Account.cooldown_until <= now),
+            )
+        )
+        gp_total = session.scalar(select(func.sum(Account.gp)))
+        credits_total = session.scalar(select(func.sum(Account.credits)))
+
+        return StatsResponse(
+            worker_alive=worker_alive,
+            worker_last_beat_at=beat or None,
+            cache_enabled=store.get_cache_enabled(session),
+            queue=StatsQueue(queued=queued, active=active),
+            downloads=StatsDownloads(
+                archives_ready=archives_ready,
+                tasks_completed=completed,
+                tasks_failed=failed,
+                served_total=store.get_counter(session, SettingsStore.STATS_DOWNLOADS_SERVED_KEY),
+            ),
+            traffic=StatsTraffic(
+                bytes_downloaded_total=store.get_counter(session, SettingsStore.STATS_BYTES_DOWNLOADED_KEY),
+                cache_used_bytes=cache_service.used_bytes(),
+                cache_stored_bytes=cache_stored,
+            ),
+            credits=StatsCredits(total_spent=store.get_counter(session, SettingsStore.STATS_CREDIT_SPENT_KEY)),
+            eh_pool=StatsEhPool(
+                gp=gp_total,
+                credits=credits_total,
+                accounts_ready=accounts_ready,
+                accounts_total=accounts_total,
+            ),
+        )
 
     @app.get("/api/v1/accounts", response_model=list[AccountResponse])
     def list_accounts(_: SessionIdentity = Depends(require_admin), session: Session = Depends(db_session)):
@@ -429,7 +501,7 @@ def create_app(settings: Settings | None = None, core: AiyaCoreIntegration | Non
 
     @app.get("/api/v1/settings", response_model=SettingsResponse)
     def get_settings_api(_: SessionIdentity = Depends(require_admin), session: Session = Depends(db_session)):
-        return settings_response(session, store, settings.aiya_core_base_url)
+        return settings_response(session, store, settings.aiya_core_base_url, settings.aiya_core_enabled)
 
     @app.put("/api/v1/settings", response_model=SettingsResponse)
     def update_settings_api(
@@ -439,7 +511,7 @@ def create_app(settings: Settings | None = None, core: AiyaCoreIntegration | Non
     ):
         store.update_public_settings(session, **payload.model_dump())
         session.commit()
-        return settings_response(session, store, settings.aiya_core_base_url)
+        return settings_response(session, store, settings.aiya_core_base_url, settings.aiya_core_enabled)
 
     @app.post("/api/v1/settings/api-token/rotate", response_model=TokenRotateResponse)
     def rotate_api_token(_: SessionIdentity = Depends(require_admin), session: Session = Depends(db_session)):
@@ -505,9 +577,10 @@ def account_response(account: Account) -> AccountResponse:
     )
 
 
-def settings_response(session: Session, store: SettingsStore, core_base_url: str) -> SettingsResponse:
+def settings_response(session: Session, store: SettingsStore, core_base_url: str, core_enabled: bool) -> SettingsResponse:
     return SettingsResponse(
         access_mode=store.get_access_mode(session),
+        core_enabled=core_enabled,
         core_site_url=store.get_core_site_url(session),
         core_base_url=core_base_url,
         guest_download_mode=store.get_guest_download_mode(session),
@@ -516,6 +589,8 @@ def settings_response(session: Session, store: SettingsStore, core_base_url: str
         cache_limit_bytes=store.get_cache_limit_bytes(session),
         max_archive_size_mb=store.get_max_archive_size_mb(session),
         worker_concurrency=store.get_worker_concurrency(session),
+        task_max_retries=store.get_task_max_retries(session),
+        eh_proxy_url=store.get_eh_proxy_url(session),
         api_token_configured=store.get_api_token_hash(session) is not None,
         price_create_original=store.get_price(session, SettingsStore.PRICE_CREATE_ORIGINAL_KEY),
         price_create_resample=store.get_price(session, SettingsStore.PRICE_CREATE_RESAMPLE_KEY),

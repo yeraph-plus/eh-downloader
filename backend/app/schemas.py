@@ -95,6 +95,7 @@ class AccountResponse(BaseModel):
 
 class SettingsResponse(BaseModel):
     access_mode: Literal["admin", "guest", "core"]
+    core_enabled: bool
     core_site_url: str
     core_base_url: str
     guest_download_mode: Literal["disabled", "resample", "original"]
@@ -103,6 +104,8 @@ class SettingsResponse(BaseModel):
     cache_limit_bytes: int
     max_archive_size_mb: int
     worker_concurrency: int
+    task_max_retries: int
+    eh_proxy_url: str
     api_token_configured: bool
     price_create_original: int
     price_create_resample: int
@@ -116,9 +119,11 @@ class SettingsUpdateRequest(BaseModel):
     guest_download_mode: Literal["disabled", "resample", "original"]
     cache_enabled: bool
     retention_days: int = Field(ge=0, le=3650)
-    cache_limit_bytes: int = Field(ge=1024**3, le=10 * 1024**4)
-    max_archive_size_mb: int = Field(ge=1, le=1024 * 1024)
+    cache_limit_bytes: int = Field(ge=0, le=10 * 1024**4)
+    max_archive_size_mb: int = Field(ge=0, le=1024 * 1024)
     worker_concurrency: int = Field(ge=1, le=4)
+    task_max_retries: int = Field(default=3, ge=0, le=5)
+    eh_proxy_url: str = Field(default="", max_length=255)
     price_create_original: int = Field(ge=0, le=1_000_000)
     price_create_resample: int = Field(ge=0, le=1_000_000)
     price_download_original: int = Field(ge=0, le=1_000_000)
@@ -127,3 +132,43 @@ class SettingsUpdateRequest(BaseModel):
 
 class TokenRotateResponse(BaseModel):
     token: str
+
+
+class StatsQueue(BaseModel):
+    queued: int
+    active: int
+
+
+class StatsDownloads(BaseModel):
+    archives_ready: int
+    tasks_completed: int
+    tasks_failed: int
+    served_total: int
+
+
+class StatsTraffic(BaseModel):
+    bytes_downloaded_total: int
+    cache_used_bytes: int
+    cache_stored_bytes: int
+
+
+class StatsCredits(BaseModel):
+    total_spent: int
+
+
+class StatsEhPool(BaseModel):
+    gp: int | None
+    credits: int | None
+    accounts_ready: int
+    accounts_total: int
+
+
+class StatsResponse(BaseModel):
+    worker_alive: bool
+    worker_last_beat_at: int | None
+    cache_enabled: bool
+    queue: StatsQueue
+    downloads: StatsDownloads
+    traffic: StatsTraffic
+    credits: StatsCredits
+    eh_pool: StatsEhPool

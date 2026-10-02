@@ -24,7 +24,7 @@ class RemoteDelivery:
     client: EHClient
     url: str
     filename: str
-    max_bytes: int
+    max_bytes: int | None
 
 
 def _safe_filename(value: str, limit: int = 180) -> str:
@@ -64,7 +64,10 @@ class DeliveryService:
         task.wait_reason = None
         session.commit()
 
-        client = EHClient(self.auth.get_cookie(archive.account), self.settings)
+        client = EHClient(
+            self.auth.get_cookie(archive.account), self.settings,
+            proxy=self.store.get_eh_proxy_url(session) or None,
+        )
         url = archive.remote_download_url
         must_check = (
             task.download_count > 0
@@ -107,7 +110,8 @@ class DeliveryService:
                 url = result.download_url
                 self._update_remote_url(task.id, url)
 
-        max_bytes = self.store.get_max_archive_size_mb(session) * 1024**2
+        max_mb = self.store.get_max_archive_size_mb(session)
+        max_bytes = max_mb * 1024**2 if max_mb > 0 else None
         filename = (
             f"{task.gid} [{task.archive_type}] - "
             f"{_safe_filename(archive.title or f'Gallery {task.gid}')}.zip"
@@ -147,6 +151,9 @@ class DeliveryService:
                         task.wait_reason = "Archive is ready for another on-demand download"
                         task.error = None
                         task.completed_at = utcnow()
+                        # Stats埋点：relay 交付一次计数；字节来自 EH，计入拉取流量。
+                        self.store.bump_counter(session, SettingsStore.STATS_DOWNLOADS_SERVED_KEY, 1)
+                        self.store.bump_counter(session, SettingsStore.STATS_BYTES_DOWNLOADED_KEY, received)
                     elif failure == "Download was interrupted":
                         task.status = TaskStatus.WAITING_DOWNLOAD.value
                         task.wait_reason = "Previous download was interrupted"

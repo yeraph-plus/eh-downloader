@@ -20,6 +20,17 @@ export interface SessionState {
   csrf_token: string | null
 }
 
+export interface ServiceStats {
+  worker_alive: boolean
+  worker_last_beat_at: number | null
+  cache_enabled: boolean
+  queue: { queued: number; active: number }
+  downloads: { archives_ready: number; tasks_completed: number; tasks_failed: number; served_total: number }
+  traffic: { bytes_downloaded_total: number; cache_used_bytes: number; cache_stored_bytes: number }
+  credits: { total_spent: number }
+  eh_pool: { gp: number | null; credits: number | null; accounts_ready: number; accounts_total: number }
+}
+
 export interface Task {
   id: string
   gallery_url: string
@@ -60,6 +71,7 @@ export interface Account {
 
 export interface Settings {
   access_mode: AccessMode
+  core_enabled: boolean
   core_site_url: string
   core_base_url: string
   guest_download_mode: GuestDownloadMode
@@ -68,6 +80,8 @@ export interface Settings {
   cache_limit_bytes: number
   max_archive_size_mb: number
   worker_concurrency: number
+  task_max_retries: number
+  eh_proxy_url: string
   api_token_configured: boolean
   price_create_original: number
   price_create_resample: number

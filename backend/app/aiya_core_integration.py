@@ -8,6 +8,7 @@ import httpx
 from fastapi import HTTPException, Request
 
 from .models import PUBLIC_REQUESTER_TYPES
+from .settings_store import SettingsStore
 
 # Site bearer tokens are `{userId}.{secret}` alphanumerics (the site's own
 # session reader applies the same shape gate before trusting a cookie).
@@ -83,7 +84,14 @@ class AiyaCoreIntegration:
         return SESSION_TOKEN_PATTERN.match(value) is not None
 
     def enabled(self) -> bool:
-        return bool(self.settings.aiya_core_base_url and self.settings.aiya_core_service_key)
+        # Master switch first: with AIYA_CORE_ENABLED off the whole
+        # integration surface hides (core mode degrades to guest) even
+        # when the base URL and service key are present.
+        return bool(
+            self.settings.aiya_core_enabled
+            and self.settings.aiya_core_base_url
+            and self.settings.aiya_core_service_key
+        )
 
     def effective_mode(self, configured: str) -> str:
         """`core` without the integration configured degrades to `guest`
@@ -232,12 +240,16 @@ class AiyaCoreIntegration:
             meter = None
 
         try:
-            return self.spend(user_id, price, "spend_eh", ref, dedupe=dedupe, meter=meter)
+            result = self.spend(user_id, price, "spend_eh", ref, dedupe=dedupe, meter=meter)
         except IntegrationError as exc:
             detail = str(exc)
             if exc.balance is not None:
                 detail = f"{detail} (current balance: {exc.balance})"
             raise HTTPException(status_code=exc.status_code, detail=detail) from exc
+        # Stats埋点：只记真实扣费，duplicate 是去重命中不产生新消耗。
+        if not result["duplicate"]:
+            store.bump_counter(db_session, SettingsStore.STATS_CREDIT_SPENT_KEY, price)
+        return result
 
     # --- Raw site surface ----------------------------------------------------
 

@@ -17,7 +17,7 @@ def main() -> None:
         settings,
         database,
         store,
-        AuthService(settings, security),
+        AuthService(settings, security, store),
         CacheService(settings, store),
         TaskService(settings),
     ).run_forever()

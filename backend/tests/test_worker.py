@@ -21,7 +21,7 @@ def make_worker(settings):
         settings,
         database,
         store,
-        AuthService(settings, security),
+        AuthService(settings, security, store),
         CacheService(settings, store),
         TaskService(settings),
     )
@@ -257,6 +257,63 @@ def test_worker_error_updates_assigned_account_status(test_settings):
         assert account.enabled is False
         assert account.last_error == "EH Cookie is not authenticated"
         assert account.last_check is not None
+
+
+def test_retryable_error_backs_off_until_setting_cap(test_settings):
+    database, _, worker = make_worker(test_settings)
+    with database.session_factory() as session:
+        task = add_task(session)
+        task_id = task.id
+        session.commit()
+
+    expected = (30, 120, 600)
+    for attempt, delay in enumerate(expected):
+        worker._handle_error(task_id, EHClientError("EH archive page request failed: boom", retryable=True), retryable=True)
+        with database.session_factory() as session:
+            task = session.get(DownloadTask, task_id)
+            assert task.status == TaskStatus.QUEUED.value or task.status in {
+                TaskStatus.CHECKING_CACHE.value,
+                TaskStatus.REQUESTING_ARCHIVE.value,
+            }
+            assert task.retry_count == attempt + 1
+            wait = (task.next_attempt_at - utcnow()).total_seconds()
+            assert delay - 5 <= wait <= delay + 5, f"attempt {attempt}: wait={wait}"
+            assert task.error == "EH archive page request failed: boom"
+
+    worker._handle_error(task_id, EHClientError("EH archive page request failed: boom", retryable=True), retryable=True)
+    with database.session_factory() as session:
+        task = session.get(DownloadTask, task_id)
+        assert task.status == TaskStatus.FAILED.value
+
+
+def test_zero_retry_setting_fails_immediately(test_settings):
+    database, _, worker = make_worker(test_settings)
+    with database.session_factory() as session:
+        session.add(AppSetting(key="task_max_retries", value="0"))
+        task = add_task(session)
+        task_id = task.id
+        session.commit()
+
+    worker._handle_error(task_id, EHClientError("EH download failed: boom", retryable=True), retryable=True)
+    with database.session_factory() as session:
+        task = session.get(DownloadTask, task_id)
+        assert task.status == TaskStatus.FAILED.value
+        assert task.next_attempt_at is None
+
+
+def test_garbage_retry_setting_falls_back_to_default(test_settings):
+    database, _, worker = make_worker(test_settings)
+    with database.session_factory() as session:
+        session.add(AppSetting(key="task_max_retries", value="not-a-number"))
+        task = add_task(session)
+        task_id = task.id
+        session.commit()
+
+    worker._handle_error(task_id, EHClientError("boom", retryable=True), retryable=True)
+    with database.session_factory() as session:
+        task = session.get(DownloadTask, task_id)
+        assert task.retry_count == 1
+        assert task.status != TaskStatus.FAILED.value
 
 
 def test_disabled_cache_skips_existing_cache_entry(test_settings):

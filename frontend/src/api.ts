@@ -9,6 +9,24 @@ export class ApiError extends Error {
   }
 }
 
+// HTTPException answers a string detail; request-validation errors (422)
+// answer a list of {loc, msg} objects instead — flatten that into readable
+// text so callers never surface "[object Object]".
+export function detailText(detail: unknown): string {
+  if (typeof detail === 'string') return detail
+  if (Array.isArray(detail)) {
+    return detail
+      .map((item) => {
+        const entry = (item ?? {}) as { loc?: unknown[]; msg?: unknown }
+        const path = Array.isArray(entry.loc) ? entry.loc.filter((part) => part !== 'body').join('.') : ''
+        return typeof entry.msg === 'string' ? (path ? `${path}: ${entry.msg}` : entry.msg) : ''
+      })
+      .filter(Boolean)
+      .join('; ')
+  }
+  return ''
+}
+
 export function setCsrfToken(value: string) {
   csrfToken = value
   sessionStorage.setItem('csrf-token', value)
@@ -30,7 +48,8 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
     let message = `Request failed (${response.status})`
     try {
       const payload = await response.json()
-      message = payload.detail || message
+      const text = detailText(payload.detail)
+      if (text) message = text
     } catch {
       // Keep the HTTP fallback message.
     }

@@ -20,14 +20,14 @@ button, input, textarea { font: inherit; }
 .app-shell { min-height: 100vh; }
 .topbar { min-height: 58px; display: grid; grid-template-columns: 220px 1fr auto; align-items: center; padding: 0 22px; background: #fff; border-bottom: 1px solid #dfe3e1; position: sticky; top: 0; z-index: 10; }
 .brand-lockup { display: flex; align-items: center; gap: 10px; font-size: 15px; font-weight: 720; white-space: nowrap; }
-.brand-mark { width: 30px; height: 30px; display: grid; place-items: center; color: #fff; background: #247052; border-radius: 5px; }
+.brand-mark { width: 30px; height: 30px; display: grid; place-items: center; color: #fff; background: #429488; border-radius: 5px; }
 .topbar nav { display: flex; align-self: stretch; gap: 2px; }
 .topbar nav button { border: 0; background: transparent; color: #616862; padding: 0 16px; display: flex; align-items: center; gap: 7px; cursor: pointer; border-bottom: 2px solid transparent; }
-.topbar nav button.active { color: #1f5e47; border-bottom-color: #247052; font-weight: 650; }
+.topbar nav button.active { color: #429488; border-bottom-color: #429488; font-weight: 650; }
 .top-actions { display: flex; align-items: center; justify-content: flex-end; gap: 4px; }
 .content { width: min(1440px, 100%); margin: 0 auto; padding: 24px; display: grid; gap: 18px; }
 .price-banner { margin-bottom: 18px; background: white; border: 1px solid #dfe3e1; border-radius: 6px; padding: 18px 20px; }
-.price-banner .price-title { color: #1f392e; }
+.price-banner .price-title { color: #429488; }
 .price-banner .price-title { font-weight: 600; margin-bottom: 8px; }
 .price-banner .price-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
 .price-banner .price-list li { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
@@ -43,9 +43,9 @@ button, input, textarea { font: inherit; }
 .section-heading span { color: #858b87; font-size: 12px; }
 .file-cell { display: grid; gap: 3px; min-width: 0; }
 .file-title { font-weight: 620; color: #2c3430; text-decoration: none; overflow-wrap: anywhere; }
-.file-title:hover { color: #247052; }
+.file-title:hover { color: #429488; }
 .gallery-url { color: #5d6962; font-size: 11px; line-height: 1.45; overflow-wrap: anywhere; text-decoration: none; }
-.gallery-url:hover { color: #247052; text-decoration: underline; }
+.gallery-url:hover { color: #429488; text-decoration: underline; }
 .row-meta { font-size: 11px; }
 .status-cell { display: grid; gap: 7px; }
 .account-import { display: grid; grid-template-columns: minmax(160px, 260px) minmax(220px, 1fr) 120px; gap: 10px; padding: 16px 16px 0; }
@@ -84,3 +84,9 @@ button, input, textarea { font: inherit; }
 .login-panel .brand-lockup { margin-bottom: 10px; }
 .login-panel .gate-hint + .n-button,
 .login-panel .n-button:only-of-type { margin-top: 18px; }
+
+/* 统计页状态徽标（集成轮新增） */
+.stat-ok { color: #429488; font-weight: 600; }
+.stat-bad { color: #b3261e; font-weight: 600; }
+.setting-row > span { text-align: right; }
+.gate-hint.gate-hint-left { justify-content: flex-start; }
