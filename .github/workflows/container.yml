@@ -54,7 +54,9 @@ jobs:
 
   publish:
     name: Publish ${{ matrix.name }} image
-    if: github.event_name != 'pull_request'
+    # Releases ship from version tags only: branch pushes run the tests
+    # and stop there, so the package never grows per-push sha- versions.
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
     needs: test
     runs-on: ubuntu-latest
     strategy:
@@ -65,19 +67,16 @@ jobs:
             dockerfile: docker/web.Dockerfile
             cache_scope: eh-downloader
             tags: |
-              type=ref,event=branch,enable=${{ github.ref_name != 'hath' }}
               type=ref,event=tag
               type=semver,pattern={{version}}
               type=semver,pattern={{major}}.{{minor}}
-              type=sha,prefix=sha-
-              type=raw,value=latest,enable={{is_default_branch}}
+              type=raw,value=latest
           - name: H@H Client
             dockerfile: docker/hath.Dockerfile
             cache_scope: hath
             tags: |
-              type=raw,value=hath,enable={{is_default_branch}}
-              type=sha,prefix=hath-sha-
               type=ref,event=tag,prefix=hath-
+              type=raw,value=hath
     permissions:
       contents: read
       packages: write
@@ -118,3 +117,21 @@ jobs:
           cache-to: type=gha,mode=max,scope=${{ matrix.cache_scope }}
           provenance: mode=max
           sbom: true
+
+  cleanup:
+    name: Prune sha- tagged versions
+    needs: publish
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Remove sha- and hath-sha- tagged versions
+        uses: dataaxiom/ghcr-cleanup-action@v1
+        with:
+          owner: ${{ github.repository_owner }}
+          package: eh-downloader
+          delete-tags: "sha-*,hath-sha-*"
+          delete-untagged: true
+          token: ${{ secrets.GITHUB_TOKEN }}
