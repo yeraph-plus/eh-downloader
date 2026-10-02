@@ -231,6 +231,24 @@ def test_core_mode_charges_the_site_user_per_creation(test_settings):
             assert task.requester_id == "7"
 
 
+def test_core_mode_type_lock_top_tier_admits_resample(test_settings):
+    """The creation lock is a ceiling, not an equality: at its top tier
+    (original) the site user may still pick resample and is billed at the
+    resample price — the same rule the guest desk follows."""
+    app, fake, client = build(test_settings, mode="core")
+    with client:
+        set_price(app, "guest_download_mode", "original")
+        set_price(app, "price_create_resample", "3")
+        client.cookies.set("aiya_session", SITE_COOKIE)
+        created = client.post(
+            "/api/v1/tasks",
+            json={"gallery_urls": "https://e-hentai.org/g/12345/abcdef0123/", "archive_type": "resample"},
+        )
+        assert created.status_code == 202
+        assert created.json()[0]["archive_type"] == "resample"
+        assert [charge["amount"] for charge in fake.spends] == [3]
+
+
 def test_core_mode_resubmitting_a_live_task_is_free(test_settings):
     app, fake, client = build(test_settings, mode="core")
     with client:

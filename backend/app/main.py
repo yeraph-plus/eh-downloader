@@ -235,7 +235,9 @@ def create_app(settings: Settings | None = None, core: AiyaCoreIntegration | Non
             guest_download_mode = store.get_guest_download_mode(session)
             if guest_download_mode == "disabled":
                 raise HTTPException(status_code=403, detail="Guest task creation is disabled")
-            if payload.archive_type != guest_download_mode:
+            # The tier is the highest requestable type, so the top tier
+            # (original) admits both archive types; below it only itself.
+            if guest_download_mode != "original" and payload.archive_type != guest_download_mode:
                 raise HTTPException(status_code=403, detail=f"Guests may only request {guest_download_mode} archives")
         urls = [line.strip() for line in payload.gallery_urls.splitlines() if line.strip()]
         if not urls:

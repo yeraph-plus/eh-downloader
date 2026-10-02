@@ -48,7 +48,7 @@ const copy = {
   billingEndpointDesc: ['站点侧需要暴露的积分扣费端点，供本服务在创建/下载时调用。', 'The credit-spend endpoint the site exposes; called on creation and download.'],
   apiDocs: ['接口文档', 'API docs'],
   apiDocsDesc: ['本服务的 OpenAPI 文档（Swagger UI），始终可用。', 'The OpenAPI docs of this service (Swagger UI), always available.'],
-  guestDownloads: ['游客创建下载', 'Guest downloads'], guestDownloadsDesc: ['所有游客共享一个公共身份；此项仅控制新任务类型。', 'All guests share one public identity. This controls only the type of new tasks.'],
+  guestDownloads: ['游客创建下载', 'Guest downloads'], guestDownloadsDesc: ['所有访客共享一个公共身份；此项为可创建的最高任务类型，最高档下重采样与原始归档均可选。', 'All visitors share one public identity. This is the highest task type they may create; at the top tier both resample and original are selectable.'],
   guestDisabled: ['完全禁止', 'Disabled'],
   enableCache: ['启用本地缓存', 'Local cache'], enableCacheDesc: ['开启时下载并校验 ZIP 后保存；关闭时不落盘，由 API 实时中转 EH 下载。', 'When enabled, verified ZIP files are stored locally. When disabled, the API relays each EH download without storing it.'],
   retention: ['缓存保留天数', 'Cache retention'], retentionDesc: ['归档完成后保留的天数；设为 0 时永久保留。', 'Days to retain completed archives. Set to 0 to keep them permanently.'],
@@ -108,6 +108,9 @@ const coreConfigured = ref(false)
 const coreLoginUrl = ref<string | null>(null)
 const submitting = ref(false)
 const loading = ref(false)
+/** 首轮任务列表加载未落地（进入页面/登出后为 true）；轮询不置位，
+ *  避免列表本就为空时每 3 秒闪一次加载圈。 */
+const tasksLoading = ref(true)
 const tasks = ref<Task[]>([])
 const accounts = ref<Account[]>([])
 const settings = ref<Settings | null>(null)
@@ -124,6 +127,8 @@ const canCreateTask = computed(() =>
   isAdmin.value ||
   (accessMode.value !== 'admin' && guestDownloadMode.value !== 'disabled' && (accessMode.value !== 'core' || siteIdentity.value)),
 )
+/** 任务表格的加载态：手动刷新中，或首轮列表尚未落地且暂无数据可显示。 */
+const taskTableLoading = computed(() => loading.value || (tasksLoading.value && tasks.value.length === 0))
 const integrationDegraded = computed(() => settings.value?.access_mode === 'core' && !coreConfigured.value)
 /** 线上集成模式的计价横幅：付费项橙色徽章、免费项绿色徽章（0 积分）。 */
 function priceBadge(value: number): string {
@@ -226,11 +231,11 @@ async function initialize() {
     const state = await api<SessionState>('/api/v1/auth/session')
     applySession(state)
     syncArchiveType()
+    // 任务列表并行拉取、不阻塞应用壳：表格先转加载态，数据落地后填充。
+    refreshTasks()
     if (isAdmin.value) {
       const [rows, current] = await Promise.all([api<Account[]>('/api/v1/accounts'), api<Settings>('/api/v1/settings')])
       accounts.value = rows; settings.value = current
-    } else {
-      await refreshTasks()
     }
   } catch (cause) { error.value = (cause as Error).message } finally {
     ready.value = true
@@ -238,16 +243,25 @@ async function initialize() {
   }
 }
 
-/** 非 admin 的归档类型跟随访问模式锁（档位配置为 original 时不同步则每次提交都 403）。 */
+/** 非 admin 可选的归档类型集：档位是可创建的最高类型，最高档（原始归档）
+ *  下重采样与原始归档均可选；重采样档仍只有重采样。admin 不受限。 */
+const allowedArchiveTypes = computed<ArchiveType[]>(() => {
+  if (isAdmin.value || guestDownloadMode.value === 'original') return ['resample', 'original']
+  return guestDownloadMode.value === 'resample' ? ['resample'] : []
+})
+
+/** 非 admin 的归档类型钳制在档位允许集内（会话加载时档位可能已被调小）。 */
 function syncArchiveType() {
-  if (!isAdmin.value && guestDownloadMode.value !== 'disabled') {
-    archiveType.value = guestDownloadMode.value
+  const allowed = allowedArchiveTypes.value
+  if (!isAdmin.value && allowed.length > 0 && !allowed.includes(archiveType.value)) {
+    archiveType.value = allowed.includes('original') ? 'original' : 'resample'
   }
 }
 
 async function refreshTasks() {
   try { tasks.value = await api<Task[]>('/api/v1/tasks') }
   catch (cause) { if (!(cause instanceof ApiError && (cause.status === 401 || cause.status === 403))) error.value = (cause as Error).message }
+  finally { tasksLoading.value = false }
 }
 
 async function refreshAll() {
@@ -276,6 +290,8 @@ async function login() {
     guestEntered.value = true
     const [rows, current] = await Promise.all([api<Account[]>('/api/v1/accounts'), api<Settings>('/api/v1/settings')])
     accounts.value = rows; settings.value = current
+    // 管理员身份的任务视图与游客不同，立即拉取而不是等 3 秒轮询。
+    refreshTasks()
     syncPolling()
   } catch (cause) { error.value = (cause as Error).message } finally { loginLoading.value = false }
 }
@@ -285,6 +301,9 @@ async function logout() {
     clearCsrfToken(); tasks.value = []; settings.value = null; accounts.value = []
     activePage.value = 'downloads'
     guestEntered.value = false
+    // 列表已清空：重新转加载态并按新身份立即拉取，不等轮询。
+    tasksLoading.value = true
+    refreshTasks()
     const state = await api<SessionState>('/api/v1/auth/session')
     applySession(state)
     syncPolling()
@@ -377,9 +396,9 @@ watch(isAdmin, (value) => { if (!value) activePage.value = 'downloads' })
         <section v-if="canCreateTask" class="submit-band">
           <n-input v-model:value="galleryUrls" type="textarea" :autosize="{ minRows: 3, maxRows: 10 }" :placeholder="`https://e-hentai.org/g/{gid}/{token}/\n${t('galleryUrls')}`" />
           <div class="submit-controls">
-            <n-radio-group v-model:value="archiveType" :disabled="!isAdmin" name="archive-type">
-              <n-radio-button value="resample">{{ t('resample') }}</n-radio-button>
-              <n-radio-button value="original">{{ t('original') }}</n-radio-button>
+            <n-radio-group v-model:value="archiveType" :disabled="allowedArchiveTypes.length < 2" name="archive-type">
+              <n-radio-button value="resample" :disabled="!allowedArchiveTypes.includes('resample')">{{ t('resample') }}</n-radio-button>
+              <n-radio-button value="original" :disabled="!allowedArchiveTypes.includes('original')">{{ t('original') }}</n-radio-button>
             </n-radio-group>
             <n-button type="primary" :loading="submitting" :disabled="!galleryUrls.trim()" @click="createTask"><template #icon><plus :size="16" /></template>{{ t('addTask') }}</n-button>
           </div>
@@ -395,7 +414,7 @@ watch(isAdmin, (value) => { if (!value) activePage.value = 'downloads' })
         </div>
         <section class="table-section">
           <div class="section-heading"><div><h1>{{ t('tasks') }}</h1><span>{{ tasks.length }} {{ t('items') }}</span></div><n-button quaternary circle :title="t('refresh')" :loading="loading" @click="refreshAll"><template #icon><refresh-cw :size="18" /></template></n-button></div>
-          <n-data-table :columns="taskColumns" :data="tasks" :loading="loading" :row-key="(row: Task) => row.id" :bordered="false" />
+          <n-data-table :columns="taskColumns" :data="tasks" :loading="taskTableLoading" :row-key="(row: Task) => row.id" :bordered="false" />
         </section>
       </template>
 

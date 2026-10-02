@@ -1,6 +1,6 @@
 [project]
 name = "eh-downloader"
-version = "1.2.1"
+version = "1.2.2"
 description = "Queue and cache official E-Hentai archive downloads"
 requires-python = ">=3.11"
 dependencies = [

@@ -254,6 +254,12 @@ def test_public_guest_download_modes_share_one_identity(test_settings):
             json={"gallery_urls": "https://e-hentai.org/g/33333/abcdef0123/", "archive_type": "original"},
         )
         assert accepted.status_code == 202
+        # The top tier is cumulative: resample stays requestable under it.
+        accepted_resample = guest.post(
+            "/api/v1/tasks",
+            json={"gallery_urls": "https://e-hentai.org/g/44444/abcdef0123/", "archive_type": "resample"},
+        )
+        assert accepted_resample.status_code == 202
 
 
 def test_guest_archive_access_supports_local_cache_and_remote_relay(test_settings, monkeypatch):
