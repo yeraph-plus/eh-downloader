@@ -103,6 +103,10 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository }}
           tags: ${{ matrix.tags }}
+          # Both matrix legs build a semver-looking tag; the flavor's
+          # latest=auto would silently add a `latest` tag to BOTH images
+          # and race on it. Only the web leg ships `latest` (raw rule).
+          flavor: latest=false
 
       - name: Build and push ${{ matrix.name }}
         uses: docker/build-push-action@v6
