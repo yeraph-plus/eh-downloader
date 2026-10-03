@@ -1,3 +1,4 @@
+import logging
 import re
 import threading
 import time
@@ -33,6 +34,11 @@ RETRY_DELAYS = (30, 120, 600, 1800, 3600)
 # infers liveness from this throttled heartbeat in the settings table.
 HEARTBEAT_EVERY_SECONDS = 15
 
+# Transient host I/O failures (e.g. the Docker Desktop file-share bridge
+# returning EIO while the host enters sleep) must not kill the poll loop;
+# sustained failure still gives up so the restart policy takes over.
+TRANSIENT_FAILURE_LIMIT = 10
+
 
 def safe_filename(value: str, limit: int = 180) -> str:
     cleaned = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", value).strip(" .")
@@ -61,9 +67,19 @@ class ArchiveWorker:
     def run_forever(self) -> None:
         self.database.create_all()
         self.cache.root()
+        failures = 0
         while True:
-            self._beat()
-            self.run_once()
+            try:
+                self._beat()
+                self.run_once()
+                failures = 0
+            except OSError as exc:
+                failures += 1
+                if failures >= TRANSIENT_FAILURE_LIMIT:
+                    raise
+                logging.getLogger(__name__).warning(
+                    "Transient I/O error in poll loop (%s/%s): %s", failures, TRANSIENT_FAILURE_LIMIT, exc
+                )
             time.sleep(self.settings.worker_poll_seconds)
 
     def _beat(self) -> None:
